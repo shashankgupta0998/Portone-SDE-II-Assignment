@@ -26,6 +26,13 @@ type query struct {
 	sql         string
 }
 
+// describe renders a row's description for grouping: rows matched through a wildcard rule
+// (levels 2 and 4) are grouped together, since their description played no part in the match.
+func describe(levelExpr string) string {
+	return `CASE WHEN ` + levelExpr + ` IN (2, 4) THEN COALESCE(r.amount_type || ' / ', '') || '(any: matched by wildcard)'
+	             ELSE COALESCE(r.amount_type || ' / ', '') || COALESCE(r.description, '') END`
+}
+
 // Every query reads the latest run only (derived tables hold only that run).
 var diagnostics = []query{
 	{
@@ -50,7 +57,7 @@ var diagnostics = []query{
 		title:   "Unruled payment columns (non-zero column, no rule for it in the matched group)",
 		columns: []string{"source", "settlement id", "transaction type", "description", "amount field", "group level", "components", "amount", "file lines (first 20)"},
 		numeric: []bool{false, false, false, false, false, true, true, true, false},
-		sql: `SELECT c.source, COALESCE(r.settlement_id, ''), COALESCE(r.transaction_type, ''), COALESCE(r.description, ''),
+		sql: `SELECT c.source, COALESCE(r.settlement_id, ''), COALESCE(r.transaction_type, ''), ` + describe("c.rule_level") + `,
 		             c.amount_field, COALESCE(c.rule_level::text, ''), count(*)::text, sum(c.amount)::text,
 		             array_to_string((array_agg(r.line_no ORDER BY r.line_no))[1:20], ',')
 		      FROM mapped_components c JOIN source_rows r ON r.id = c.source_row_id
@@ -81,11 +88,11 @@ var diagnostics = []query{
 		        SELECT c.source_row_id, c.source, c.amount_field,
 		               string_agg(c.rule_id::text, ',' ORDER BY c.rule_id) AS rule_ids,
 		               string_agg(DISTINCT NULLIF(c.summary_field, ''), ',') AS fields,
-		               max(c.amount) AS amount,
+		               max(c.amount) AS amount, max(c.rule_level) AS rule_level,
 		               sum(c.amount) FILTER (WHERE c.status = 'routed') AS routed
 		        FROM mapped_components c WHERE c.rule_id IS NOT NULL
 		        GROUP BY c.source_row_id, c.source, c.amount_field HAVING count(*) > 1)
-		      SELECT d.source, COALESCE(r.transaction_type, ''), COALESCE(r.amount_type || ' / ', '') || COALESCE(r.description, ''),
+		      SELECT d.source, COALESCE(r.transaction_type, ''), ` + describe("d.rule_level") + `,
 		             d.amount_field, d.rule_ids, COALESCE(d.fields, ''), count(*)::text, sum(d.amount)::text,
 		             COALESCE(sum(d.routed), 0)::text
 		      FROM dup d JOIN source_rows r ON r.id = d.source_row_id
@@ -96,7 +103,7 @@ var diagnostics = []query{
 		title:   "record_ref field tokens that resolved empty",
 		columns: []string{"source", "rule id", "transaction type", "description", "empty tokens", "components", "example record_ref"},
 		numeric: []bool{false, true, false, false, false, true, false},
-		sql: `SELECT c.source, COALESCE(c.rule_id::text, ''), COALESCE(r.transaction_type, ''), COALESCE(r.description, ''),
+		sql: `SELECT c.source, COALESCE(c.rule_id::text, ''), COALESCE(r.transaction_type, ''), ` + describe("c.rule_level") + `,
 		             c.empty_tokens, count(*)::text, min(c.record_ref)
 		      FROM mapped_components c JOIN source_rows r ON r.id = c.source_row_id
 		      WHERE c.empty_tokens IS NOT NULL GROUP BY 1, 2, 3, 4, 5 ORDER BY 1, 2`,
@@ -105,9 +112,9 @@ var diagnostics = []query{
 		title:   "Source rows whose rules build more than one record_ref",
 		columns: []string{"source", "transaction type", "description", "distinct refs per row", "source rows"},
 		numeric: []bool{false, false, false, true, true},
-		sql: `WITH m AS (SELECT source_row_id, count(DISTINCT record_ref) AS n FROM mapped_components
+		sql: `WITH m AS (SELECT source_row_id, count(DISTINCT record_ref) AS n, max(rule_level) AS rule_level FROM mapped_components
 		               WHERE record_ref IS NOT NULL GROUP BY 1 HAVING count(DISTINCT record_ref) > 1)
-		      SELECT r.source, COALESCE(r.transaction_type, ''), COALESCE(r.description, ''), m.n::text, count(*)::text
+		      SELECT r.source, COALESCE(r.transaction_type, ''), ` + describe("m.rule_level") + `, m.n::text, count(*)::text
 		      FROM m JOIN source_rows r ON r.id = m.source_row_id GROUP BY 1, 2, 3, 4 ORDER BY 1, 2, 3`,
 	},
 	{

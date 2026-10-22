@@ -27,7 +27,7 @@ func printTrace(w io.Writer, rows pgx.Rows) error {
 		if err := rows.Scan(&src, &file, &line, &typ, &at, &desc, &rule, &ruleLine, &af, &amt, &sf, &ref, &st, &raw); err != nil {
 			return err
 		}
-		fmt.Fprintf(tw, "%s\t%s:%d\t%s\t%s\t%s\t%s/%s\t%s\t%s\t%s\t%s\t%s\n", src, file, line, typ, at, desc, rule, ruleLine, af, amt, sf, ref, st)
+		fmt.Fprintf(tw, "%s\t%s:%d\t%s\t%s\t%s\t%s/%s\t%s\t%s\t%s\t%s\t%s\n", src, file, line, typ, at, short(desc, 40), rule, ruleLine, af, amt, sf, ref, st)
 		raws = append(raws, fmt.Sprintf("%s:%d  %s", file, line, raw))
 		n++
 	}
@@ -85,4 +85,12 @@ func Rule(ctx context.Context, pool *pgxpool.Pool, w io.Writer, source string, i
 	}
 	defer rows.Close()
 	return printTrace(w, rows)
+}
+
+func short(s string, n int) string {
+	r := []rune(s)
+	if len(r) <= n {
+		return s
+	}
+	return string(r[:n-1]) + "…"
 }
