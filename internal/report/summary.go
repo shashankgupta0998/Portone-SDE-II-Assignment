@@ -45,9 +45,22 @@ func writeSummary(f *excelize.File, st styles, run RunInfo, d *summaryData) erro
 	}
 
 	deferredCol := func(row int, v decimal.Decimal, style int) error { return set(cell("F", row), money(v), style) }
+	allCol := func(row int, v decimal.Decimal, style int) error { return set(cell("G", row), money(v), style) }
+	// Row 1 keeps the sample's headers; row 2 (empty in the sample) says exactly what each
+	// value column contains.
 	for _, h := range []struct{ c, v string }{{"C1", "Payments"}, {"D1", "Settlements"}, {"E1", "Payments - Settlements"},
-		{"F1", "Memo: Payments Deferred (not in C)"}} {
+		{"F1", "Memo: Payments Deferred (not in C)"}, {"G1", "Payments, all in-scope records (Released + Deferred)"}} {
 		if err := set(h.c, h.v, st.bold); err != nil {
+			return err
+		}
+	}
+	for _, h := range []struct{ c, v string }{
+		{"C2", "Payment records of the settlement, Transaction status Released"},
+		{"D2", "Settlement records only"},
+		{"E2", "C - D"},
+		{"F2", "Payment records of the settlement, Transaction status Deferred"},
+		{"G2", "All payment records of the settlement (Released + Deferred), summed separately; equals C + F"}} {
+		if err := set(h.c, h.v, st.note); err != nil {
 			return err
 		}
 	}
@@ -56,12 +69,12 @@ func writeSummary(f *excelize.File, st styles, run RunInfo, d *summaryData) erro
 	}
 
 	pay, settle := d.routed["payments"], d.routed["settlements"]
-	totalP, totalS := decimal.Zero, decimal.Zero
+	totalP, totalS, totalA := decimal.Zero, decimal.Zero, decimal.Zero
 	row := 4
 	for _, sec := range sections {
 		headerRow := row
 		row++
-		subP, subS, subD := decimal.Zero, decimal.Zero, decimal.Zero
+		subP, subS, subD, subA := decimal.Zero, decimal.Zero, decimal.Zero, decimal.Zero
 		for _, l := range d.lines {
 			if l.Section != sec {
 				continue
@@ -75,7 +88,11 @@ func writeSummary(f *excelize.File, st styles, run RunInfo, d *summaryData) erro
 			if err := deferredCol(row, d.deferredBy[l.Field], st.money); err != nil {
 				return err
 			}
+			if err := allCol(row, d.allPayBy[l.Field], st.money); err != nil {
+				return err
+			}
 			subP, subS, subD = subP.Add(pay[l.Field]), subS.Add(settle[l.Field]), subD.Add(d.deferredBy[l.Field])
+			subA = subA.Add(d.allPayBy[l.Field])
 			row++
 		}
 		if err := set(cell("B", headerRow), sec, st.indent2Bold); err != nil {
@@ -87,7 +104,10 @@ func writeSummary(f *excelize.File, st styles, run RunInfo, d *summaryData) erro
 		if err := deferredCol(headerRow, subD, st.moneyBold); err != nil {
 			return err
 		}
-		totalP, totalS = totalP.Add(subP), totalS.Add(subS)
+		if err := allCol(headerRow, subA, st.moneyBold); err != nil {
+			return err
+		}
+		totalP, totalS, totalA = totalP.Add(subP), totalS.Add(subS), totalA.Add(subA)
 		if err := merge(row); err != nil {
 			return err
 		}
@@ -112,7 +132,10 @@ func writeSummary(f *excelize.File, st styles, run RunInfo, d *summaryData) erro
 		if err := deferredCol(row, d.deferredBy[l.Field], st.money); err != nil {
 			return err
 		}
-		totalP, totalS = totalP.Add(pay[l.Field]), totalS.Add(settle[l.Field])
+		if err := allCol(row, d.allPayBy[l.Field], st.money); err != nil {
+			return err
+		}
+		totalP, totalS, totalA = totalP.Add(pay[l.Field]), totalS.Add(settle[l.Field]), totalA.Add(d.allPayBy[l.Field])
 		row++
 	}
 	for _, r := range []int{row, row + 2, row + 3} {
@@ -145,6 +168,9 @@ func writeSummary(f *excelize.File, st styles, run RunInfo, d *summaryData) erro
 		return err
 	}
 	if err := values(row, totalP, totalS, st.moneyBold); err != nil {
+		return err
+	}
+	if err := allCol(row, totalA, st.moneyBold); err != nil {
 		return err
 	}
 	netLinesRow := row
@@ -229,7 +255,7 @@ func writeSummary(f *excelize.File, st styles, run RunInfo, d *summaryData) erro
 	if err := f.SetColWidth(sh, "B", "B", 70); err != nil {
 		return err
 	}
-	return f.SetColWidth(sh, "C", "F", 22)
+	return f.SetColWidth(sh, "C", "G", 24)
 }
 
 func contains(xs []string, s string) bool {

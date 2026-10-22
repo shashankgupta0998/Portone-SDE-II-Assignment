@@ -57,7 +57,8 @@ committed reports or from a query against the database (queries in PROGRESS.md �
   would include every payment record of the settlement, Deferred ones too.
 - **What we did.** The Payments column (C) holds the **Released** records of settlement
   12395580393. The 2,398 **Deferred** rows (2,381 record_refs, 43,540.07) are shown per line in
-  column F, so the literal Payments figure for any line is C + F.
+  column F. Column G gives the literal reading directly: all in-scope payment records (Released +
+  Deferred), summed by its own query, so G = C + F on every line.
 - **Why.** Deferred rows have no release date and no settlement line, and none of their
   record_refs is in the settlement file. Mixing a timing difference into Payments − Settlements
   would hide routing defects behind 43k of unrelated money.
@@ -71,7 +72,7 @@ committed reports or from a query against the database (queries in PROGRESS.md �
   | **= Amazon settlement total-amount** | **212,118.95** |
 
   Net of the Summary lines: Released only (column C) **212,118.95** = Amazon's total. All
-  in-scope records (C + F) **255,659.02**, i.e. 43,540.07 above the Settlements column. Per
+  in-scope records (column G) **255,659.02**, i.e. 43,540.07 above the Settlements column. Per
   section, column F carries the difference: Sales 75,250.98, Refunds −153.82, Expenses
   −31,557.09.
 
@@ -372,7 +373,7 @@ is empty (`Deferred` rows). This interpretation lives in `mapping.RefDate`.
 
 | Sheet | Contents |
 |---|---|
-| **Summary** | Rows 1–36 reproduce the sample exactly (Sales / Refunds / Expenses sections with subtotals on the section rows, Paid To Amazon on row 32). Payments column = payment records of the settlement with Transaction status Released; column F = the Deferred ones (memo); Settlements column = settlement records only; values are the totals streamed during ingestion. Below, a **tie-out** block: net of Summary lines, amounts routed to fields with no Summary line, amounts not routed to any field, net amount per source, Amazon's settlement `total-amount`, and the difference — every value a database sum. |
+| **Summary** | Rows 1–36 reproduce the sample's layout (Sales / Refunds / Expenses sections with subtotals on the section rows, Paid To Amazon on row 32); row 2, empty in the sample, describes each value column. C Payments = payment records of the settlement with Transaction status Released; D Settlements = settlement records only; E = C − D; F (memo) = the Deferred payment records; G = all in-scope payment records (Released + Deferred, summed by a separate query; equals C + F). Values are the totals streamed during ingestion. Below, a **tie-out** block: net of Summary lines, amounts routed to fields with no Summary line, amounts not routed to any field, net amount per source, Amazon's settlement `total-amount`, and the difference — every value a database sum. |
 | **Consolidated Data** | The sample's column layout (A..DA): DS1 payment fields + Total + 21 buckets, DS2 settlement fields + Total + 21 buckets, Reconciliation Status, DS1−DS2 total and per-bucket differences. One row per record_ref, ordered reconciled → unreconciled payments → unreconciled settlements. Audit columns after DA: record_ref, row counts and `file:line` lists per side, settlement amount types, rule ids, buckets with no Summary line, and why a record is not reconciled (Deferred / zero-value / not summarised / no counterpart). |
 | **Out of Scope Payments** | Same layout for payment records of other settlement ids. |
 | **Exceptions** | Status totals, unmapped / unruled amounts, rules that never fired, amounts applied by more than one rule, empty key tokens, fields with no Summary line, ingest errors. |

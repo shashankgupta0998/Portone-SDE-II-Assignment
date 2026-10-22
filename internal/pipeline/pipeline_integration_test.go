@@ -3,8 +3,10 @@ package pipeline_test
 import (
 	"context"
 	"fmt"
+	"math"
 	"os"
 	"path/filepath"
+	"strconv"
 	"testing"
 	"time"
 
@@ -156,6 +158,28 @@ func TestEndToEnd(t *testing.T) {
 		"F1": "Memo: Payments Deferred (not in C)"} {
 		if v, _ := f.GetCellValue(report.SheetSummary, c); v != want {
 			t.Errorf("Summary %s = %q, want %q", c, v, want)
+		}
+	}
+	// Column G: all in-scope payment records (Released 40 + Deferred 15 = 55 on Product Charges),
+	// queried separately from C and F; the out-of-scope row must not be in it.
+	for c, want := range map[string]string{"G1": "Payments, all in-scope records (Released + Deferred)", "G5": "55.00"} {
+		if v, _ := f.GetCellValue(report.SheetSummary, c); v != want {
+			t.Errorf("Summary %s = %q, want %q", c, v, want)
+		}
+	}
+	// G = C + F on every line, section row and Paid To Amazon (rows 4-32).
+	num := func(c string) float64 {
+		v, _ := f.GetCellValue(report.SheetSummary, c, excelize.Options{RawCellValue: true})
+		x, _ := strconv.ParseFloat(v, 64)
+		return x
+	}
+	for r := 4; r <= 32; r++ {
+		if label, _ := f.GetCellValue(report.SheetSummary, fmt.Sprintf("B%d", r)); label == "" {
+			continue
+		}
+		c, fv, g := num(fmt.Sprintf("C%d", r)), num(fmt.Sprintf("F%d", r)), num(fmt.Sprintf("G%d", r))
+		if math.Abs(c+fv-g) > 0.0001 {
+			t.Errorf("Summary row %d: C %v + F %v != G %v", r, c, fv, g)
 		}
 	}
 	rows, err := f.GetRows(report.SheetConsolidated)

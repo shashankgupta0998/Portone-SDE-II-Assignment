@@ -43,6 +43,7 @@ type summaryData struct {
 	lines        []SummaryLine
 	routed       map[string]map[string]decimal.Decimal // source -> field -> amount (streamed, in scope, Released)
 	deferredBy   map[string]decimal.Decimal            // field -> in-scope Deferred payment amount (streamed)
+	allPayBy     map[string]decimal.Decimal            // field -> all in-scope payment amounts, Released + Deferred (streamed)
 	net          sourceTotals                          // payments: sum(total) of Released rows; settlements: sum(amount)
 	headerTotal  decimal.Decimal                       // Amazon's settlement total-amount
 	deferred     decimal.Decimal                       // in-scope payments with status Deferred, sum(total)
@@ -82,6 +83,7 @@ func loadSummary(ctx context.Context, pool *pgxpool.Pool, run RunInfo) (*summary
 	d := &summaryData{
 		routed:     map[string]map[string]decimal.Decimal{"payments": {}, "settlements": {}},
 		deferredBy: map[string]decimal.Decimal{},
+		allPayBy:   map[string]decimal.Decimal{},
 		fileNames:  map[string]string{},
 		headerByID: map[string]map[string]string{},
 	}
@@ -122,6 +124,25 @@ func loadSummary(ctx context.Context, pool *pgxpool.Pool, run RunInfo) (*summary
 			continue
 		}
 		d.routed[src][field] = dec(amt)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// All in-scope payment records regardless of Transaction status (the literal reading of
+	// "Payment column purely from ingested payment records"), summed by the database on its own
+	// rather than added up from the Released and Deferred maps above.
+	rows, err = pool.Query(ctx, `SELECT summary_field, sum(amount)::text FROM stream_summary
+		WHERE run_id = $1 AND source = 'payments' AND settlement_id = ANY($2::text[]) GROUP BY 1`, run.ID, run.Scope)
+	if err != nil {
+		return nil, err
+	}
+	for rows.Next() {
+		var field, amt string
+		if err := rows.Scan(&field, &amt); err != nil {
+			return nil, err
+		}
+		d.allPayBy[field] = dec(amt)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
