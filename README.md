@@ -313,8 +313,9 @@ make lint && make test && make test-integration
 - **Scope** is the settlement id(s) present in the settlement file. Payment rows of other settlement
   ids are kept and reported separately, not treated as unreconciled.
 - **Deferred** payment rows carry the settlement id but have no release date and no settlement line:
-  they are not part of this settlement (Released rows + the payout transfer = Amazon's total-amount
-  exactly). They are reconciled and listed (as unreconciled payments, reason "Deferred"), but the
+  they are not part of this settlement (the Released rows excluding the payout transfer sum to
+  Amazon's total-amount, 212,118.95, exactly; equivalently Released incl. transfer 78,362.44 +
+  133,756.51 = 212,118.95). They are reconciled and listed (as unreconciled payments, reason "Deferred"), but the
   Summary's Payments column holds Released rows only and shows the Deferred amounts per line in
   column F, so a timing difference is not mixed into the comparison.
 - **GST** of orders is reported on the Summary's Sales / Tax line on both sides (MAPPING_FIXES D5):

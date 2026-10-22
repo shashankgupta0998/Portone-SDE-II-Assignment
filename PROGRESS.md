@@ -50,7 +50,9 @@ Record counts (scope: settlement 12395580393): **reconciled 13,289 · unreconcil
 unreconciled settlement 0** · out-of-scope payment records 7,041 (rows of the three other
 settlement ids, kept and listed separately).
 
-Summary sheet, in scope (Payments − Settlements):
+Summary sheet, in scope (Payments − Settlements). This first table still has the Deferred rows in
+the Payments column; it is superseded by the numbers in §4, which match the committed
+`reports/report_before_fix.xlsx`:
 
 | Line | Payments | Settlements | Difference |
 |---|---:|---:|---:|
@@ -96,8 +98,8 @@ regenerated the before-fix report with the same code so before/after differ only
 (commit `23ae7cb`):
 
 - **Deferred rows are not part of this settlement.** In-scope payment rows split by
-  `Transaction status`: Released rows sum (total) to 78,362.44; adding back the transfer
-  (-133,756.51, see D1) gives **212,118.95 = Amazon's total-amount exactly**. The 2,398 Deferred
+  `Transaction status`: Released rows sum (total) to 78,362.44; excluding the transfer
+  (−133,756.51, see D1) they sum to **212,118.95 = Amazon's total-amount exactly**. The 2,398 Deferred
   rows (43,540.07) have no release date and none of their 2,381 record_refs exists in the
   settlement file. So the Payments column = Released rows; Deferred rows are shown per line in
   column F as a timing memo (D-M2), not mixed into the comparison.
@@ -234,7 +236,7 @@ unreconciled settlement 0** (7,041 out-of-scope payment records of other settlem
 
 | Remaining item | Records | Amount | Why it stays |
 |---|---:|---:|---|
-| Deferred payment rows (D-M2) | 2,381 | 43,540.07 | Not released; no release date; no settlement line. Released + transfer = 212,118.95 proves they are outside this settlement. Shown per line in Summary column F. The 3 whose order id is in the settlement file are other SKUs of the same order (checked). |
+| Deferred payment rows (D-M2) | 2,381 | 43,540.07 | Not released; no release date; no settlement line. Released rows excluding the transfer sum to 212,118.95 (78,362.44 incl. transfer + 133,756.51), which proves they are outside this settlement. Shown per line in Summary column F. The 3 whose order id is in the settlement file are other SKUs of the same order (checked). |
 | Payout transfer, line 16605 (D-M3) | 1 | −133,756.51 | A disbursement, not a settlement line; not summarised after D1. It is the only item between "net amount per source" (78,362.44) and Amazon's total (212,118.95). |
 | Zero-value order lines (D-M4) | 25 | 0.00 | All amount columns 0; Amazon posts no settlement line; none of those order ids is in the settlement file. |
 | Other settlement ids (D-M5) | 7,041 | 28,306.64 | Settlements 12370691583 / 12382593803 / 12407469483 are not in the settlement file. Listed on "Out of Scope Payments". |
