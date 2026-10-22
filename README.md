@@ -18,24 +18,49 @@ Deliverables in this repository:
 | Source code | `cmd/recon`, `internal/*` |
 | Mapping fixes | [`MAPPING_FIXES.sql`](MAPPING_FIXES.sql) |
 | Before-fix report (configs as provided) | `reports/report_before_fix.xlsx` |
-| After-fix report | `reports/report_after_fix.xlsx` (produced by `make after`) |
-| PostgreSQL dump | `db/recon_dump.sql.gz` (produced by `make dump`) |
+| After-fix report | `reports/report_after_fix.xlsx` (configs + `MAPPING_FIXES.sql`) |
+| PostgreSQL dump (after-fix state) | `db/recon_dump.sql.gz` |
 | Progress log | [`PROGRESS.md`](PROGRESS.md) and the commit history |
 | Input data, unmodified | `data/` (byte-identical copies of the files provided) |
 
 ## Results
 
-Before fixes (configs exactly as provided), scope = settlement `12395580393`:
+Scope = settlement `12395580393` (the only settlement in the settlement file). Counts are distinct
+record_refs, the same before and after the fixes (the fixes change routing and one key, not which
+rows match):
 
-| Status | Records (distinct record_ref) |
-|---|---:|
-| Reconciled | 13,289 |
-| Unreconciled payment | 2,407 |
-| Unreconciled settlement | 0 |
-| Out-of-scope payment (other settlement ids, reported separately) | 7,041 |
+| Status | Records | Why |
+|---|---:|---|
+| Reconciled | 13,289 | |
+| Unreconciled payment | 2,407 | 2,381 Deferred (not yet released, 43,540.07) · 25 zero-value order lines (0.00) · 1 payout transfer (−133,756.51) |
+| Unreconciled settlement | 0 | |
+| Out-of-scope payment (other settlement ids, reported separately) | 7,041 | settlements 12370691583 / 12382593803 / 12407469483, not in the settlement file |
 
-The before-fix Summary lines, their variances and the investigation are in
-[`PROGRESS.md`](PROGRESS.md); the fixes are in [`MAPPING_FIXES.sql`](MAPPING_FIXES.sql).
+Summary, Payments (Released rows of the settlement) vs Settlements:
+
+| | Before fixes: P − S | After fixes: Payments | Settlements | P − S |
+|---|---:|---:|---:|---:|
+| Sales / Product Charges | −92.84 | 335,336.96 | 335,336.96 | 0.00 |
+| Sales / Tax | 0.00 | 13,478.97 | 13,478.97 | 0.00 |
+| Sales / Shipping | 13,572.17 | 8,294.16 | 8,294.16 | 0.00 |
+| Sales / Inventory Reimbursements | 0.00 | 679.69 | 679.69 | 0.00 |
+| Sales / Other | −11.97 | 11.61 | 11.61 | 0.00 |
+| Refunds / Refund expenses | 42.59 | 216.28 | 216.28 | 0.00 |
+| Refunds / Refunded sales | 0.00 | −2,031.37 | −2,031.37 | 0.00 |
+| Expenses / Promo rebates | 11,273.53 | −11,273.53 | −11,273.53 | 0.00 |
+| Expenses / FBA fees | 0.00 | −0.41 | −0.41 | 0.00 |
+| Expenses / Amazon fees | −133,756.51 | −132,593.41 | −132,593.41 | 0.00 |
+| Expenses / Other | −11,273.53 | 0.00 | 0.00 | 0.00 |
+| **Net of Summary lines** | −120,246.56 | **212,118.95** | **212,118.95** | 0.00 |
+
+Both columns tie to Amazon's settlement `total-amount` **212,118.95 AUD**, every reconciled record
+agrees field by field, and all self-checks pass. Lines not shown are 0 on both sides. Deferred
+payment rows (43,540.07) are shown per line in Summary column F. The payout transfer is the only
+difference between the payments' net amount (78,362.44) and Amazon's total.
+
+Twelve config defects (D1–D7 moved money here, D8–D12 are latent) and the items that cannot be
+closed are documented in [`MAPPING_FIXES.sql`](MAPPING_FIXES.sql); how each was isolated, with the
+query behind every amount, is in [`PROGRESS.md`](PROGRESS.md).
 
 ## Running it
 
@@ -221,7 +246,8 @@ is empty (`Deferred` rows). This interpretation lives in `mapping.RefDate`.
   `--settlement-id`. Payment rows of other settlement ids are ingested, mapped and listed on the
   *Out of Scope Payments* sheet with status `out_of_scope_payment`; they are not counted as
   unreconciled and do not enter the Summary's Payments column. Deferred rows of the in-scope settlement
-  are not filtered.
+  are reconciled like any other row (they end up unreconciled: no settlement line) but are kept out of
+  the Summary's Payments column and shown in column F (see Assumptions).
 - **Granularity**: components are aggregated per (side, record_ref) *before* matching — per-bucket
   sums, distinct source-row count, source line numbers, and a Total equal to the sum of the source
   amounts of the distinct rows behind the key (payments: the row's `total`; settlements: the row's
@@ -237,8 +263,8 @@ is empty (`Deferred` rows). This interpretation lives in `mapping.RefDate`.
 
 | Sheet | Contents |
 |---|---|
-| **Summary** | Rows 1–36 reproduce the sample exactly (Sales / Refunds / Expenses sections with subtotals on the section rows, Paid To Amazon on row 32). Payments column = payment records only; Settlements column = settlement records only; values are the totals streamed during ingestion. Below, a **tie-out** block: net of Summary lines, amounts routed to fields with no Summary line, amounts not routed to any field, net amount per source, Amazon's settlement `total-amount`, and the difference — every value a database sum. |
-| **Consolidated Data** | The sample's column layout (A..DA): DS1 payment fields + Total + 21 buckets, DS2 settlement fields + Total + 21 buckets, Reconciliation Status, DS1−DS2 total and per-bucket differences. One row per record_ref, ordered reconciled → unreconciled payments → unreconciled settlements. Audit columns after DA: record_ref, row counts and `file:line` lists per side, settlement amount types, rule ids, buckets with no Summary line. |
+| **Summary** | Rows 1–36 reproduce the sample exactly (Sales / Refunds / Expenses sections with subtotals on the section rows, Paid To Amazon on row 32). Payments column = payment records of the settlement with Transaction status Released; column F = the Deferred ones (memo); Settlements column = settlement records only; values are the totals streamed during ingestion. Below, a **tie-out** block: net of Summary lines, amounts routed to fields with no Summary line, amounts not routed to any field, net amount per source, Amazon's settlement `total-amount`, and the difference — every value a database sum. |
+| **Consolidated Data** | The sample's column layout (A..DA): DS1 payment fields + Total + 21 buckets, DS2 settlement fields + Total + 21 buckets, Reconciliation Status, DS1−DS2 total and per-bucket differences. One row per record_ref, ordered reconciled → unreconciled payments → unreconciled settlements. Audit columns after DA: record_ref, row counts and `file:line` lists per side, settlement amount types, rule ids, buckets with no Summary line, and why a record is not reconciled (Deferred / zero-value / not summarised / no counterpart). |
 | **Out of Scope Payments** | Same layout for payment records of other settlement ids. |
 | **Exceptions** | Status totals, unmapped / unruled amounts, rules that never fired, amounts applied by more than one rule, empty key tokens, fields with no Summary line, ingest errors. |
 | **Run Info** | Run label, scope, input file sha256s, rule-table fingerprints, counts, self-checks, and the summary totals of every run in the database (before vs after). |
@@ -253,6 +279,14 @@ Descriptive DS1/DS2 columns show the first source row of a record; amounts are s
 - Each payment row's amount columns add up to its `total`.
 - No unparseable cells (`ingest_errors`).
 - Unmapped / unruled amounts (informational; itemised on the Exceptions sheet).
+- No (row, column) amount routed by more than one rule (duplicate rules double count).
+- Amounts summarised through a fallback rule (informational: a catch-all hiding a missing rule).
+- Every routed amount lands on a Summary line.
+- Net of the Summary lines == Amazon `total-amount`, per source (settlements: fail; payments: info).
+- Every reconciled record agrees per summary field between the two sides — catches misroutes that
+  net to zero on record totals and on Summary columns.
+
+Before the fixes four of these flag problems; after `MAPPING_FIXES.sql` all pass.
 
 ## Testing
 
@@ -277,8 +311,14 @@ make lint && make test && make test-integration
   quoting, thousands separators, month spellings, time zones, case) happens in code.
 - **Scope** is the settlement id(s) present in the settlement file. Payment rows of other settlement
   ids are kept and reported separately, not treated as unreconciled.
-- **Deferred** payment rows of the in-scope settlement are not filtered out; they flow through the
-  reconciliation and are explained rather than hidden.
+- **Deferred** payment rows carry the settlement id but have no release date and no settlement line:
+  they are not part of this settlement (Released rows + the payout transfer = Amazon's total-amount
+  exactly). They are reconciled and listed (as unreconciled payments, reason "Deferred"), but the
+  Summary's Payments column holds Released rows only and shows the Deferred amounts per line in
+  column F, so a timing difference is not mixed into the comparison.
+- **GST** of orders is reported on the Summary's Sales / Tax line on both sides (MAPPING_FIXES D5):
+  the payments report has one tax column per row, so a per-component split cannot be matched.
+  Refund GST stays in Refund expenses, as both configs route refund components.
 - **Date token**: UTC date of the payment release timestamp vs settlement `posted-date` (above).
 - **Zero amounts** carry no sign, so they route to no bucket.
 - **Duplicate rules** in one group are applied as written and surfaced, not silently de-duplicated.
@@ -299,6 +339,10 @@ make lint && make test && make test-integration
   in the same dump, not only via the before-fix workbook.
 - Add explicit precedence/priority and "applies to sign" columns to the config schema so duplicate or
   overlapping rules are impossible to express by accident, plus a config linter that runs on load.
+- A match-type column (exact / prefix) for descriptions with a variable tail such as
+  "To account ending with: 334" (D1 is fixed with `TRANSFER + any`, which works because the exact
+  MICRO_DEPOSIT rules take precedence), and an allocation rule type if GST must be split by base line
+  on the payments side (MAPPING_FIXES D-X1).
 - Property-based tests for the record_ref builder and a golden-file test of the full workbook.
 - Parallel parsing for much larger files (the COPY path is already batched; parsing is single-threaded).
 - Currency handling for multi-currency settlements (this data is AUD only; amounts are not converted).
