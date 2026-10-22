@@ -1,4 +1,4 @@
-# End-to-end flow: make db-up (optional) -> make before -> make after -> make dump
+# End-to-end flow: make db-up (optional) -> make before -> make after-gst -> make after -> make dump
 -include .env
 export
 
@@ -9,9 +9,10 @@ SET      := $(DATA)/amazon_settlements_data.txt
 PAY_CFG  := $(DATA)/amazon_payment_configs_au_old.csv
 SET_CFG  := $(DATA)/amazon_settlement_configs_au.csv
 FIXES    := MAPPING_FIXES.sql
+GST_OPTION := MAPPING_FIXES_OPTION_GST.sql
 RECON_SCHEMA ?= recon
 
-.PHONY: build test test-integration lint db-up db-down before after dump diagnose clean
+.PHONY: build test test-integration lint db-up db-down before after after-gst dump diagnose clean
 
 build:
 	go build -o $(BIN) ./cmd/recon
@@ -39,10 +40,20 @@ before: build
 	-$(BIN) run --payments $(PAY) --settlements $(SET) --label before-fix --out reports/report_before_fix.xlsx
 
 # Configs as provided + MAPPING_FIXES.sql applied to the rule tables -> reports/report_after_fix.xlsx
+# The exit code is ignored on purpose, as in `before`: without the GST option the known GST
+# component residual (MAPPING_FIXES.sql D5) fails reconciled_fields_agree. See README.
 after: build
 	$(BIN) load-config --payments-config $(PAY_CFG) --settlement-config $(SET_CFG)
 	$(BIN) apply-sql --file $(FIXES)
-	$(BIN) run --payments $(PAY) --settlements $(SET) --label after-fix --out reports/report_after_fix.xlsx
+	-$(BIN) run --payments $(PAY) --settlements $(SET) --label after-fix --out reports/report_after_fix.xlsx
+
+# Configs as provided + MAPPING_FIXES.sql + MAPPING_FIXES_OPTION_GST.sql
+#   -> reports/report_after_fix_gst_option.xlsx (every self-check must pass, so the exit code counts)
+after-gst: build
+	$(BIN) load-config --payments-config $(PAY_CFG) --settlement-config $(SET_CFG)
+	$(BIN) apply-sql --file $(FIXES)
+	$(BIN) apply-sql --file $(GST_OPTION)
+	$(BIN) run --payments $(PAY) --settlements $(SET) --label after-fix-gst-option --out reports/report_after_fix_gst_option.xlsx
 
 dump:
 	mkdir -p db

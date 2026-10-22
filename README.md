@@ -76,11 +76,12 @@ make db-up                    # optional: PostgreSQL 16 in docker
 make test                     # unit tests (integration tests skip without TEST_DATABASE_URL)
 make test-integration         # integration tests against PostgreSQL (needs TEST_DATABASE_URL)
 make before                   # configs as provided  -> reports/report_before_fix.xlsx
+make after-gst                # + MAPPING_FIXES_OPTION_GST.sql -> reports/report_after_fix_gst_option.xlsx
 make after                    # configs + MAPPING_FIXES.sql -> reports/report_after_fix.xlsx
 make dump                     # pg_dump of the recon schema -> db/recon_dump.sql.gz
 ```
 
-`make before` / `make after` each run the whole flow end to end and are safe to repeat: they reload
+`make before` / `make after` / `make after-gst` each run the whole flow end to end and are safe to repeat: they reload
 the configs from the CSVs, re-ingest both files (replacing the previous ingestion), reconcile and
 write the report. A full run over the real files takes ~20 s.
 
@@ -102,8 +103,17 @@ bin/recon report    --out reports/report_after_fix.xlsx
 
 `bin/recon run --payments … --settlements … --out … --label …` does ingest + reconcile + report in one
 command. `recon` exits non-zero if any self-check fails (the report is still written so the failure
-can be inspected). `make before` ignores that exit code on purpose: with the configs as provided,
-`amount_routed_once` and `reconciled_fields_agree` fail — that is the finding. `make after` does not.
+can be inspected). `make before` and `make after` ignore that exit code on purpose; `make after-gst`
+does not, so it fails if any check fails.
+
+- `make before`: with the configs as provided, `amount_routed_once` and `reconciled_fields_agree`
+  fail. That is the finding.
+- `make after`: only `reconciled_fields_agree` fails, on 805 reconciled records (1,610 record × field
+  differences). They are exactly the records whose Order GST the settlement config splits across
+  Product Charges, Shipping and Other, and each differs by exactly its own GST components
+  (`sql/queries/gst_residual_records.sql` finds 0 mismatching record-fields). This is the known GST
+  residual (MAPPING_FIXES.sql D5). The check is not weakened and no record is special-cased.
+- `make after-gst`: every self-check passes.
 
 ### Auditing a number
 

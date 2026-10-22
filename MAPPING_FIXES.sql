@@ -21,8 +21,13 @@
 -- with Transaction status Released (the Payments column of the Summary sheet);
 -- "deferred" and "other settlements" give the movement in the rest of the file.
 -- Defects that cannot be fixed in the config, or that belong in matching logic,
--- have a commented block too (D-M*, D-X*). PROGRESS.md has the query behind
+-- have a commented block too (D5, D-M*, D-X*). PROGRESS.md has the query behind
 -- every amount.
+--
+-- MAPPING_FIXES_OPTION_GST.sql is a separate, optional reporting choice applied on
+-- top of this file (`make after-gst`): it moves all Order GST to the Sales / Tax line
+-- on both sides so that every Summary line ties. See D5 and README "Interpretation
+-- choices".
 
 BEGIN;
 
@@ -99,7 +104,8 @@ UPDATE payment_mapping_rules
 --   The payments report has ONE tax column per row (tax on principal + shipping +
 --   gift wrap + promotion tax discount, see D5); a column-level rule cannot split
 --   it, so the second rule can only duplicate it.
--- Change: delete line 72. (Where the remaining rule routes to is D5.)
+-- Change: delete line 72. The remaining rule (line 71) still routes the column to
+--   Product Charges; see D5 for why that leaves a GST residual.
 -- Moves: -13,675.59 out of Sales / Shipping (deferred -6,472.50).
 DELETE FROM payment_mapping_rules
  WHERE src_line = 72 AND transaction_type = 'ORDER' AND description = 'any' AND amount_field = 'sales_tax_collected'
@@ -117,7 +123,8 @@ DELETE FROM payment_mapping_rules
 -- Rules: payments config lines 5/6
 --     ORDER,any,low_value_goods,txn_ref+sku+date,sales_shipping,sales_shipping
 --     ORDER,any,low_value_goods,txn_ref+sku+date,sales_product_charges,sales_product_charges
--- Change: delete line 5. (Where the remaining rule routes to is D5.)
+-- Change: delete line 5. The remaining rule (line 6) still routes the column to
+--   Product Charges; see D5.
 -- Moves: +196.62 into Sales / Shipping (removes the second, negative copy;
 --   deferred +91.26).
 DELETE FROM payment_mapping_rules
@@ -125,72 +132,58 @@ DELETE FROM payment_mapping_rules
    AND to_summary_field_when_positive_amount = 'sales_shipping';
 
 -- ---------------------------------------------------------------------------
--- D5  Order GST split by component in the settlement config, which the
---     payments report cannot express        [settlement + payments config]
+-- D5  GST component split: not closable in the config schema
+--                                           [settlement + payments config; no SQL]
 -- ---------------------------------------------------------------------------
--- Summary lines (after D3/D4): Product Charges P - S = -92.84, Shipping +93.20,
---   Sales / Other -0.36 (gift-wrap tax; the other -11.61 of that line is D6).
---   Nets to zero inside Sales, so the Sales subtotal hides it.
--- Proof: for each of the 13,217 reconciled Order record_refs, the payment row's
---   sales_tax_collected equals the sum of its settlement lines ItemPrice/Tax +
---   ItemPrice/ShippingTax + ItemPrice/GiftWrapTax + Promotion/TaxDiscount, and its
---   low_value_goods equals LowValueGoodsTax-Principal + LowValueGoodsTax-Shipping
---   (0 mismatching records; totals 13,675.59 and -196.62). Amazon's payments report
---   only has the combined columns.
--- Rules (settlement config): line 65 ORDER,ITEMPRICE,TAX -> sales_product_charges;
---   line 63 ORDER,ITEMPRICE,SHIPPINGTAX -> sales_shipping; line 61
---   ORDER,ITEMPRICE,GIFTWRAPTAX -> sales_other; line 95 ORDER,PROMOTION,TAXDISCOUNT
---   -> sales_shipping (tax discount of principal AND shipping promotions, routed
---   to Shipping); line 119 ORDER,ITEMWITHHELDTAX,LOWVALUEGOODSTAX-PRINCIPAL ->
---   sales_product_charges; line 118 ...LOWVALUEGOODSTAX-SHIPPING -> sales_shipping;
---   line 127 ...LOWVALUEGOODSTAX-OTHER -> sales_other.
---   (payments config) line 71 ORDER sales_tax_collected -> sales_product_charges;
---   line 6 ORDER low_value_goods -> sales_product_charges.
--- Variance: settlement lines 63 + 61 + 95 + 118 send 581.68 + 0.36 - 672.16 - 2.72
---   = -92.84 to Shipping / Other that the payments side necessarily books with the
---   tax column; Tax + LVG-Principal (13,765.71 - 193.90) is not the payment column
---   (13,675.59 - 196.62) either. No routing of a single payments column can match a
---   per-component split; the only bucket definition both reports can express
---   identically is "all GST of an order in one line".
--- Change: route every Order GST component, on both sides, to sales_tax - the
---   Summary sheet's Sales / Tax line, which otherwise only receives COMMINGLING_VAT.
---   Product Charges and Shipping become GST-exclusive (product_sales and
---   shipping_credits are GST-exclusive in this report: Principal 335,336.96 =
---   product_sales; Shipping 8,294.16 = shipping_credits). Line 127 (LVG-Other, 0 rows
---   here) moves with its family so a future row cannot reopen the gap.
--- Alternative considered: keep GST inside Product Charges by pointing the settlement
---   tax components at sales_product_charges. It also ties, but it would label
---   shipping and gift-wrap GST as product revenue; the Tax line exists for this.
---   If GST must stay split by base line, the config schema cannot do it for
---   payments (see D-X1).
--- Moves (Released): Sales / Tax 0.00 -> 13,478.97 on both sides; Product Charges
---   P 348,815.93 -> 335,336.96, S 348,908.77 -> 335,336.96 (P - S -92.84 -> 0.00);
---   Shipping S 8,200.96 -> 8,294.16 (P - S +93.20 -> 0.00); Sales / Other S 11.97
---   -> 11.61 (the 0.36 gift-wrap tax). Deferred: 6,381.24 into Sales / Tax.
-UPDATE payment_mapping_rules
-   SET to_summary_field_when_positive_amount = 'sales_tax', to_summary_field_when_negative_amount = 'sales_tax'
- WHERE src_line IN (71, 6) AND transaction_type = 'ORDER' AND description = 'any'
-   AND amount_field IN ('sales_tax_collected', 'low_value_goods')
-   AND to_summary_field_when_positive_amount = 'sales_product_charges';
-UPDATE settlement_mapping_rules
-   SET to_summary_field_when_positive_amount = 'sales_tax', to_summary_field_when_negative_amount = 'sales_tax'
- WHERE transaction_type = 'ORDER'
-   AND (src_line, amount_type, amount_description) IN (
-        (65,  'ITEMPRICE',       'TAX'),
-        (63,  'ITEMPRICE',       'SHIPPINGTAX'),
-        (61,  'ITEMPRICE',       'GIFTWRAPTAX'),
-        (95,  'PROMOTION',       'TAXDISCOUNT'),
-        (119, 'ITEMWITHHELDTAX', 'LOWVALUEGOODSTAX-PRINCIPAL'),
-        (118, 'ITEMWITHHELDTAX', 'LOWVALUEGOODSTAX-SHIPPING'),
-        (127, 'ITEMWITHHELDTAX', 'LOWVALUEGOODSTAX-OTHER'));
+-- Not a defect fix, so there is no SQL here. Order GST is reported differently by the
+-- two sources:
+--   - The payments report has ONE sales_tax_collected column and ONE low_value_goods
+--     column per row. A payments rule maps a whole column to one bucket.
+--   - The settlement report splits the same GST into components, each with its own
+--     rule: line 65 ORDER,ITEMPRICE,TAX -> sales_product_charges; line 63
+--     ITEMPRICE,SHIPPINGTAX -> sales_shipping; line 61 ITEMPRICE,GIFTWRAPTAX ->
+--     sales_other; line 95 PROMOTION,TAXDISCOUNT -> sales_shipping; line 119
+--     ITEMWITHHELDTAX,LOWVALUEGOODSTAX-PRINCIPAL -> sales_product_charges; line 118
+--     ...LOWVALUEGOODSTAX-SHIPPING -> sales_shipping; line 127 ...LOWVALUEGOODSTAX-OTHER
+--     -> sales_other.
+--   After D3/D4 the payments side routes both columns to sales_product_charges
+--   (payments config lines 71 and 6). A column-level rule cannot split a column, so
+--   whatever the settlement config sends to Shipping or Other stays as a residual.
+-- Proof that the money is the same: for each of the 13,217 reconciled Order
+--   record_refs, the payment row's sales_tax_collected equals the sum of its
+--   settlement lines ItemPrice/Tax + ItemPrice/ShippingTax + ItemPrice/GiftWrapTax +
+--   Promotion/TaxDiscount, and its low_value_goods equals LowValueGoodsTax-Principal +
+--   LowValueGoodsTax-Shipping (0 mismatching records; totals 13,675.59 and -196.62).
+-- Residual in reports/report_after_fix.xlsx (Released, P - S), from the settlement
+--   components outside Product Charges: ShippingTax 581.68 + GiftWrapTax 0.36 +
+--   TaxDiscount -672.16 + LowValueGoodsTax-Shipping -2.72 = -92.84:
+--     Sales / Product Charges   -92.84
+--     Sales / Shipping          +93.20
+--     Sales / Other              -0.36   (gift-wrap tax)
+--   It nets to 0.00 inside the Sales subtotal, and both columns still net to Amazon's
+--   total-amount 212,118.95. Self-check reconciled_fields_agree fails on exactly these
+--   805 reconciled records (1,610 record x field differences, all in these three
+--   fields), each by exactly its own GST components:
+--   sql/queries/gst_residual_records.sql, 0 mismatching record-fields.
+-- Proper fix: a schema change (D-X1), e.g. an allocation rule type for payments.
+-- Alternative that makes every line tie within the current schema:
+--   MAPPING_FIXES_OPTION_GST.sql (apply after this file) routes every Order GST
+--   component, on both sides, to the Summary's Sales / Tax line. That is a reporting
+--   choice (it rewrites seven settlement rules that are not wrong on their own), so it
+--   is kept out of the defect fixes.
 
 -- ---------------------------------------------------------------------------
 -- D6  Order gift-wrap credits routed to a field that has no Summary line
 --                                                            [payments config]
 -- ---------------------------------------------------------------------------
--- Summary line: Sales / Other P - S = -11.61 (after D5); the payment amount is in
---   sales_gift_wrap_credits, which no Summary line reads, so it silently drops out
---   of the Summary (check routed_fields_on_summary lists it).
+-- Summary line: Sales / Other P - S = -11.97 before this fix (P 0.00, S 11.97); the
+--   payment amount is in sales_gift_wrap_credits, which no Summary line reads, so it
+--   silently drops out of the Summary (check routed_fields_on_summary lists it).
+--   The settlement 11.97 is gift wrap 11.61 + gift-wrap tax 0.36; this fix closes the
+--   11.61. The 0.36 is GST (settlement config line 61 ITEMPRICE,GIFTWRAPTAX ->
+--   sales_other) and stays as the Sales / Other part of the D5 residual: after this
+--   fix Sales / Other is P 11.61, S 11.97, P - S -0.36 (0.00 only with
+--   MAPPING_FIXES_OPTION_GST.sql).
 -- Source rows: amazon_payments_data.csv lines 5955, 14054, 14269 (Released,
 --   3.99 + 3.99 + 3.63 = 11.61); deferred lines 20803, 21550, 22886 (10.43).
 --   Settlement side: amazon_settlements_data.txt lines 24104, 31121, 50305
@@ -199,7 +192,8 @@ UPDATE settlement_mapping_rules
 --     ORDER,any,gift_wrap_credits,txn_ref+sku+date,sales_gift_wrap_credits,sales_gift_wrap_credits
 -- Change: both buckets -> sales_other, the bucket the settlement config uses for the
 --   same money and a line that exists on the Summary.
--- Moves: +11.61 into Sales / Other (deferred +10.43); sales_gift_wrap_credits empties.
+-- Moves: +11.61 into Sales / Other, P - S -11.97 -> -0.36 (deferred +10.43);
+--   sales_gift_wrap_credits empties.
 UPDATE payment_mapping_rules
    SET to_summary_field_when_positive_amount = 'sales_other', to_summary_field_when_negative_amount = 'sales_other'
  WHERE src_line = 70 AND transaction_type = 'ORDER' AND description = 'any' AND amount_field = 'gift_wrap_credits';
@@ -217,8 +211,10 @@ UPDATE payment_mapping_rules
 --     REFUND,any,sales_tax_collected,txn_ref+sku+date,,
 --   Empty on both signs, so refunded GST never reaches the Summary from payments.
 -- Change: both buckets -> refunded_expenses, as the settlement config does for every
---   refund tax component. (Order GST goes to Sales / Tax, D5; refunds keep the
---   Refunds-section convention both configs already use for refund components.)
+--   refund tax component. (Refunds keep the Refunds-section convention both configs
+--   already use for refund components; unlike Order GST, D5, the settlement config
+--   sends every refund tax component to the same bucket, so a single payments column
+--   can match it.)
 -- Moves: -42.59 into Refund expenses (deferred -15.81).
 UPDATE payment_mapping_rules
    SET to_summary_field_when_positive_amount = 'refunded_expenses', to_summary_field_when_negative_amount = 'refunded_expenses'
@@ -369,12 +365,15 @@ UPDATE settlement_mapping_rules
 -- ---------------------------------------------------------------------------
 -- D-X1 GST by base line is not expressible for payments          [schema change]
 -- ---------------------------------------------------------------------------
--- If the business wants GST inside Product Charges / Shipping / Other (as the
--- settlement config originally had it) instead of on the Tax line (D5), the payment
--- side cannot do it: a payments rule maps one whole column to one bucket, and the
--- report has a single sales_tax_collected column. That would need a schema change,
--- e.g. an allocation rule type (payment column split by the settlement components
--- of the same record_ref) or a payments source that reports tax per component.
+-- Closing D5 while keeping GST inside Product Charges / Shipping / Other (as the
+-- settlement config has it) is not possible for payments in the current schema: a
+-- payments rule maps one whole column to one bucket, and the report has a single
+-- sales_tax_collected column (and a single low_value_goods column). It would need a
+-- schema change, e.g. an allocation rule type (a payment column split in the
+-- proportions of the settlement components of the same record_ref) or a payments
+-- source that reports tax per component. Without a schema change the only way to
+-- make every line tie is to put all Order GST on one line on both sides:
+-- MAPPING_FIXES_OPTION_GST.sql.
 
 -- ---------------------------------------------------------------------------
 -- D-X2 Catch-all and fields without a Summary line            [observation only]
@@ -410,8 +409,6 @@ BEGIN
     IF NOT EXISTS (SELECT 1 FROM payment_mapping_rules WHERE src_line = 65 AND to_summary_field_when_negative_amount = 'expenses_promotional_rebates') THEN bad := array_append(bad, 'D2'); END IF;
     IF EXISTS (SELECT 1 FROM payment_mapping_rules WHERE src_line = 72) THEN bad := array_append(bad, 'D3'); END IF;
     IF EXISTS (SELECT 1 FROM payment_mapping_rules WHERE src_line = 5) THEN bad := array_append(bad, 'D4'); END IF;
-    IF (SELECT count(*) FROM payment_mapping_rules WHERE src_line IN (71, 6) AND to_summary_field_when_positive_amount = 'sales_tax') <> 2
-       OR (SELECT count(*) FROM settlement_mapping_rules WHERE to_summary_field_when_positive_amount = 'sales_tax' AND transaction_type = 'ORDER') <> 7 THEN bad := array_append(bad, 'D5'); END IF;
     IF NOT EXISTS (SELECT 1 FROM payment_mapping_rules WHERE src_line = 70 AND to_summary_field_when_positive_amount = 'sales_other') THEN bad := array_append(bad, 'D6'); END IF;
     IF NOT EXISTS (SELECT 1 FROM payment_mapping_rules WHERE src_line = 14 AND to_summary_field_when_negative_amount = 'refunded_expenses') THEN bad := array_append(bad, 'D7'); END IF;
     IF NOT EXISTS (SELECT 1 FROM payment_mapping_rules WHERE src_line = 4 AND to_summary_field_when_negative_amount = 'refunded_expenses') THEN bad := array_append(bad, 'D8'); END IF;
