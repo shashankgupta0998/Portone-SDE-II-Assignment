@@ -104,8 +104,9 @@ UPDATE payment_mapping_rules
 --   The payments report has ONE tax column per row (tax on principal + shipping +
 --   gift wrap + promotion tax discount, see D5); a column-level rule cannot split
 --   it, so the second rule can only duplicate it.
--- Change: delete line 72. The remaining rule (line 71) still routes the column to
---   Product Charges; see D5 for why that leaves a GST residual.
+-- Change: delete config line 72. The remaining rule (config line 71) stays on
+--   sales_product_charges in these fixes; D5 explains the GST residual that leaves.
+--   MAPPING_FIXES_OPTION_GST.sql (optional) moves it to sales_tax.
 -- Moves: -13,675.59 out of Sales / Shipping (deferred -6,472.50).
 DELETE FROM payment_mapping_rules
  WHERE src_line = 72 AND transaction_type = 'ORDER' AND description = 'any' AND amount_field = 'sales_tax_collected'
@@ -123,8 +124,9 @@ DELETE FROM payment_mapping_rules
 -- Rules: payments config lines 5/6
 --     ORDER,any,low_value_goods,txn_ref+sku+date,sales_shipping,sales_shipping
 --     ORDER,any,low_value_goods,txn_ref+sku+date,sales_product_charges,sales_product_charges
--- Change: delete line 5. The remaining rule (line 6) still routes the column to
---   Product Charges; see D5.
+-- Change: delete config line 5. The remaining rule (config line 6) stays on
+--   sales_product_charges in these fixes (see D5).
+--   MAPPING_FIXES_OPTION_GST.sql (optional) moves it to sales_tax.
 -- Moves: +196.62 into Sales / Shipping (removes the second, negative copy;
 --   deferred +91.26).
 DELETE FROM payment_mapping_rules
