@@ -1,0 +1,9 @@
+transaction_type,amount_type,amount_description,record_ref,to_summary_field_when_positive_amount,to_summary_field_when_negative_amount
+ORDER,ITEMPRICE,PRINCIPAL,txn_ref+sku+date,sales_product_charges,sales_product_charges
+ORDER,ITEMPRICE,SHIPPING,txn_ref+sku+date,sales_shipping,sales_shipping
+ORDER,PROMOTION,SHIPPING,txn_ref+sku+date,expenses_promotional_rebates,expenses_promotional_rebates
+ORDER,ITEMFEES,COMMISSION,txn_ref+sku+date,expenses_amazon_fees,expenses_amazon_fees
+ORDER,ITEMFEES,FBAPERUNITFULFILLMENTFEE,txn_ref+sku+date,expenses_fba_fees,expenses_fba_fees
+REFUND,ITEMPRICE,PRINCIPAL,txn_ref+sku+date,refunded_sales,refunded_sales
+REFUND,ITEMFEES,COMMISSION,txn_ref+sku+date,refunded_expenses,refunded_expenses
+OTHER-TRANSACTION,OTHER-TRANSACTION,SUBSCRIPTION_FEE,SERVICE_FEE_SUBSCRIPTION+settlement_id+date,expenses_amazon_fees,expenses_amazon_fees

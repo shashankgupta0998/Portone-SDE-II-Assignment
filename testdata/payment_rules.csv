@@ -1,0 +1,11 @@
+transaction_type,description,amount_field,record_ref,to_summary_field_when_positive_amount,to_summary_field_when_negative_amount
+ORDER,any,product_sales,txn_ref+sku+date,sales_product_charges,sales_product_charges
+ORDER,any,shipping_credits,txn_ref+sku+date,sales_shipping,sales_shipping
+ORDER,any,promotional_rebates,txn_ref+sku+date,expenses_promotional_rebates,expenses_promotional_rebates
+ORDER,any,selling_fees,txn_ref+sku+date,expenses_amazon_fees,expenses_amazon_fees
+ORDER,any,fba_fees,txn_ref+sku+date,expenses_fba_fees,expenses_fba_fees
+ORDER,any,total,txn_ref+sku+date,,
+REFUND,any,product_sales,txn_ref+sku+date,refunded_sales,refunded_sales
+REFUND,any,selling_fees,txn_ref+sku+date,refunded_expenses,refunded_expenses
+REFUND,any,total,txn_ref+sku+date,,
+,any,total,txn_ref+settlement_id+date,expenses_amazon_fees,expenses_amazon_fees
