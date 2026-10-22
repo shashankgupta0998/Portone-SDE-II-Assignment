@@ -244,3 +244,83 @@ unreconciled settlement 0** (7,041 out-of-scope payment records of other settlem
 The Summary's Payments − Settlements column is 0.00 on every line, and on top of that: every
 reconciled record agrees field by field, nothing is routed twice, nothing reaches the catch-all,
 nothing is routed off the Summary, and both columns' net equals Amazon's 212,118.95.
+
+## 12. Final review: separating defects from reporting choices
+
+Reviewing the fixes once more against the brief's rules ("mapping defects must be fixed in the
+mapping config data"; "if a fix genuinely cannot be expressed in the config schema at all, say
+so"), I re-read D5 (§8) and concluded it is not a defect fix:
+
+- The seven settlement GST rules it rewrote are not wrong on their own. Routing ShippingTax to
+  Shipping and GiftWrapTax to Other is a reasonable production rule. What cannot be done is
+  mirroring that split on the payments side, because a payments rule maps a whole column and the
+  report has one `sales_tax_collected` column. That is a schema limitation (D-X1).
+- Rewriting correct-looking rules until the columns agree is close to what the brief warns against
+  ("a Summary sheet whose two columns agree is necessary, not sufficient"). So the choice belongs
+  in the open, not inside the defect fixes.
+
+This supersedes the end of §8 and the closing statement of §11. "0.00 on every line, every reconciled
+record agrees field by field" now describes the GST option report. The main report is below.
+
+Changes (commit `b05333d`):
+
+- D5 moved out of `MAPPING_FIXES.sql` into `MAPPING_FIXES_OPTION_GST.sql` (own transaction,
+  precondition that the main fixes are applied, post-condition guard). In its place,
+  `MAPPING_FIXES.sql` has a commented "not closable in the config schema" block.
+- D6's comment restated without D5: Sales / Other goes from −11.97 to −0.36 (the 0.36 is
+  gift-wrap tax, settlement config line 61).
+- `make after-gst` added; `make after` now ignores the self-check exit code, as `make before` does.
+
+Re-ran all three flows from an empty schema (run 1 `before-fix`, run 2 `after-fix-gst-option`,
+run 3 `after-fix`). Counts are identical in all three: reconciled 13,289, unreconciled payment
+2,407, unreconciled settlement 0, out of scope 7,041.
+
+Main after-fix report (`reports/report_after_fix.xlsx`), Released, P − S:
+
+| Line | Payments | Settlements | P − S |
+|---|---:|---:|---:|
+| Sales / Product Charges | 348,815.93 | 348,908.77 | −92.84 |
+| Sales / Shipping | 8,294.16 | 8,200.96 | +93.20 |
+| Sales / Other | 11.61 | 11.97 | −0.36 |
+| **Sales** | 357,801.39 | 357,801.39 | **0.00** |
+| Net of Summary lines | 212,118.95 | 212,118.95 | 0.00 |
+
+Every other line is 0.00. The residual is exactly the settlement GST components outside Product
+Charges: ShippingTax 581.68 + GiftWrapTax 0.36 + Promotion/TaxDiscount −672.16 +
+LowValueGoodsTax-Shipping −2.72 = −92.84 (component totals queried from `source_rows`). In the GST
+option report every line is 0.00.
+
+Self-checks in `make after`: only `reconciled_fields_agree` fails, on 805 reconciled records with
+1,610 record × field differences. Every other check passes, including `amount_routed_once`,
+`routed_fields_on_summary` and both tie-outs to 212,118.95. To make sure the failure is the known
+residual and nothing else, `sql/queries/gst_residual_records.sql` computes, for each reconciled
+record, the expected difference from its raw settlement Order rows alone. Expected: Product
+Charges = ShippingTax + TaxDiscount + LVG-Shipping + GiftWrapTax, Shipping = −(ShippingTax +
+TaxDiscount + LVG-Shipping), Other = −GiftWrapTax. It then compares the actual per-field
+differences against that:
+
+| | Result |
+|---|---:|
+| Failing records / record-fields | 805 / 1,610 |
+| Records / record-fields with an expected GST residual | 805 / 1,610 |
+| Record-fields where actual ≠ expected | 0 |
+| Fields involved | sales_product_charges, sales_shipping, sales_other |
+
+The first version of that query reported 14 mismatching record-fields. The cause was a record_ref
+that also carries the Refund rows of the same order line: their GST components cancel the
+Order's in my expected sum, but they go to the Refunds section on both sides. Restricting the
+expected side to Order rows gave 0 mismatches.
+
+The per-record proof from §8 still holds on run 3: on all 13,217 reconciled Order records, the
+payment `sales_tax_collected` equals ItemPrice/Tax + ShippingTax + GiftWrapTax +
+Promotion/TaxDiscount (0 mismatches, 13,675.59 both sides), and `low_value_goods` equals LVG-
+Principal + LVG-Shipping (0 mismatches, −196.62).
+
+Two more interpretation points were made explicit in the README, with numbers for both readings
+(Interpretation choices §2 and §3):
+
+- **Deferred rows.** All in-scope payment records sum to 121,902.51; minus Deferred 43,540.07 and
+  minus the transfer (−133,756.51) that gives 212,118.95, Amazon's total-amount.
+- **Out-of-scope counts.** Literal unreconciled payments are 9,448. A run with all four settlement
+  ids in scope, in a throwaway schema, reported `unreconciled_payment=9448` directly. The in-scope
+  count is 2,407.
