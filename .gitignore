@@ -1,0 +1,9 @@
+/bin/
+*.test
+*.out
+.env
+/reports/*.tmp.xlsx
+~$*.xlsx
+.DS_Store
+.idea/
+.vscode/
