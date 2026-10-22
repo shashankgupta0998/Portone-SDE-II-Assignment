@@ -219,12 +219,12 @@ does not, so it fails if any check fails.
 ```bash
 bin/recon trace --summary-field expenses_amazon_fees --source payments --limit 20
 bin/recon trace --record-ref '503-8856864-4518217+BIO-S000004059_AU+2026-07-17'
-bin/recon trace --rule-id 70 --source payments
+bin/recon trace --rule-id 70 --source payments   # rule id 70 = payments config line 71 (ORDER sales_tax_collected)
 bin/recon diagnose          # rules never fired, double-applied amounts, unmapped/unruled amounts, empty key tokens
 ```
 
 Each traced line shows the source file and physical line number, the rule id and its line in the
-config CSV, the amount column, the summary field, the record_ref and the exact original line text.
+config CSV (rule ids follow file order, so config line = rule id + 1; the docs cite config lines), the amount column, the summary field, the record_ref and the exact original line text.
 The SQL view `v_component_trace` exposes the same join for ad-hoc queries; `sql/queries/` has the
 queries used during the investigation.
 
