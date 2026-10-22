@@ -215,6 +215,67 @@ func TestConfigFixIsADataChange(t *testing.T) {
 	}
 }
 
+func checkStatus(t *testing.T, res pipeline.Result, name string) string {
+	t.Helper()
+	for _, c := range res.Checks {
+		if c.Name == name {
+			return c.Status
+		}
+	}
+	t.Fatalf("check %s not run", name)
+	return ""
+}
+
+// The defect classes found in the real configs must be caught by the self-checks, not only by
+// comparing Summary columns.
+func TestSelfChecksCatchConfigDefects(t *testing.T) {
+	ctx, pool := setup(t)
+
+	// Catch-all: the transfer's description matches no TRANSFER rule, so the fallback summarises it.
+	base := run(t, ctx, pool, "base")
+	if st := checkStatus(t, base, "fallback_rule_routed"); st != "info" {
+		t.Errorf("fallback_rule_routed = %s, want info", st)
+	}
+	if st := checkStatus(t, base, "amount_routed_once"); st != "pass" {
+		t.Errorf("amount_routed_once = %s, want pass", st)
+	}
+
+	// Duplicate rule on one column (MAPPING_FIXES D3/D4): counted twice, and reconciled records
+	// disagree per field although their totals still agree.
+	if err := db.ExecFile(ctx, pool, `INSERT INTO payment_mapping_rules (transaction_type, description, amount_field, record_ref,
+		to_summary_field_when_positive_amount, to_summary_field_when_negative_amount)
+		VALUES ('ORDER', 'any', 'product_sales', 'txn_ref+sku+date', 'sales_shipping', 'sales_shipping');`); err != nil {
+		t.Fatal(err)
+	}
+	dup := run(t, ctx, pool, "duplicate")
+	if st := checkStatus(t, dup, "amount_routed_once"); st != "fail" {
+		t.Errorf("amount_routed_once = %s, want fail", st)
+	}
+	if st := checkStatus(t, dup, "reconciled_fields_agree"); st != "fail" {
+		t.Errorf("reconciled_fields_agree = %s, want fail", st)
+	}
+	if v := scalar[string](t, ctx, pool, `SELECT diff_total::text FROM recon_records WHERE record_ref = '111-1+SKU-A+2026-07-17'`); v != "0.00" {
+		t.Errorf("record total diff = %s, want 0.00 (the defect only shows per field)", v)
+	}
+
+	// Data fixes as in MAPPING_FIXES D1 and D3: the transfer gets its own rule and key.
+	if err := db.ExecFile(ctx, pool, `DELETE FROM payment_mapping_rules WHERE src_line IS NULL;
+		INSERT INTO payment_mapping_rules (transaction_type, description, amount_field, record_ref)
+		VALUES ('TRANSFER', 'any', 'total', 'TRANSFER+description+settlement_id+date');`); err != nil {
+		t.Fatal(err)
+	}
+	fixed := run(t, ctx, pool, "fixed")
+	for _, name := range []string{"fallback_rule_routed", "amount_routed_once", "reconciled_fields_agree"} {
+		if st := checkStatus(t, fixed, name); st != "pass" {
+			t.Errorf("%s = %s, want pass", name, st)
+		}
+	}
+	if n := scalar[int](t, ctx, pool, `SELECT count(*) FROM recon_records
+		WHERE record_ref = 'TRANSFER+TO_ACCOUNT_ENDING_WITH:_334+S1+2026-07-18' AND status = 'unreconciled_payment'`); n != 1 {
+		t.Errorf("transfer record_ref not built from its TRANSFER rule")
+	}
+}
+
 func splitLines(s string) []string {
 	var out []string
 	start := 0

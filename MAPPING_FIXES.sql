@@ -184,4 +184,244 @@ UPDATE settlement_mapping_rules
         (118, 'ITEMWITHHELDTAX', 'LOWVALUEGOODSTAX-SHIPPING'),
         (127, 'ITEMWITHHELDTAX', 'LOWVALUEGOODSTAX-OTHER'));
 
+-- ---------------------------------------------------------------------------
+-- D6  Order gift-wrap credits routed to a field that has no Summary line
+--                                                            [payments config]
+-- ---------------------------------------------------------------------------
+-- Summary line: Sales / Other P - S = -11.61 (after D5); the payment amount is in
+--   sales_gift_wrap_credits, which no Summary line reads, so it silently drops out
+--   of the Summary (check routed_fields_on_summary lists it).
+-- Source rows: amazon_payments_data.csv lines 5955, 14054, 14269 (Released,
+--   3.99 + 3.99 + 3.63 = 11.61); deferred lines 20803, 21550, 22886 (10.43).
+--   Settlement side: amazon_settlements_data.txt lines 24104, 31121, 50305
+--   (Order / ItemPrice / GiftWrap, 11.61) -> sales_other (settlement config line 66).
+-- Rule: payments config line 70
+--     ORDER,any,gift_wrap_credits,txn_ref+sku+date,sales_gift_wrap_credits,sales_gift_wrap_credits
+-- Change: both buckets -> sales_other, the bucket the settlement config uses for the
+--   same money and a line that exists on the Summary.
+-- Moves: +11.61 into Sales / Other (deferred +10.43); sales_gift_wrap_credits empties.
+UPDATE payment_mapping_rules
+   SET to_summary_field_when_positive_amount = 'sales_other', to_summary_field_when_negative_amount = 'sales_other'
+ WHERE src_line = 70 AND transaction_type = 'ORDER' AND description = 'any' AND amount_field = 'gift_wrap_credits';
+
+-- ---------------------------------------------------------------------------
+-- D7  Refund GST not summarised on the payments side           [payments config]
+-- ---------------------------------------------------------------------------
+-- Summary line: Refunds / Refund expenses P - S = +42.59.
+-- Source rows: 16 Released Refund rows with sales_tax_collected <> 0 (first:
+--   amazon_payments_data.csv line 14661, -1.61), sum -42.59. Settlement side for
+--   the same record_refs: Refund / ItemPrice / Tax -41.09 + ItemPrice / ShippingTax
+--   -3.19 + Promotion / TaxDiscount +1.69 = -42.59, all routed to refunded_expenses
+--   (settlement config lines 4, 11, 20).
+-- Rule: payments config line 14
+--     REFUND,any,sales_tax_collected,txn_ref+sku+date,,
+--   Empty on both signs, so refunded GST never reaches the Summary from payments.
+-- Change: both buckets -> refunded_expenses, as the settlement config does for every
+--   refund tax component. (Order GST goes to Sales / Tax, D5; refunds keep the
+--   Refunds-section convention both configs already use for refund components.)
+-- Moves: -42.59 into Refund expenses (deferred -15.81).
+UPDATE payment_mapping_rules
+   SET to_summary_field_when_positive_amount = 'refunded_expenses', to_summary_field_when_negative_amount = 'refunded_expenses'
+ WHERE src_line = 14 AND transaction_type = 'REFUND' AND description = 'any' AND amount_field = 'sales_tax_collected';
+
+-- ===========================================================================
+-- Latent defects: rules no row of these files hits (0.00 moved here), but that
+-- are wrong on their face and would misreport the first time a row arrives.
+-- ===========================================================================
+
+-- ---------------------------------------------------------------------------
+-- D8  Refund low-value-goods tax not summarised on the payments side
+--                                                            [payments config]
+-- ---------------------------------------------------------------------------
+-- Rule: payments config line 4  REFUND,any,low_value_goods,txn_ref+sku+date,,
+-- Counterpart: settlement config line 120 REFUND,ITEMWITHHELDTAX,any ->
+--   refunded_expenses. Same gap as D7 for the LVG column: a refunded LVG amount
+--   would be in Refund expenses on the settlement side and nowhere on payments.
+-- Change: both buckets -> refunded_expenses.  Moves: 0.00 (no refund row has
+--   low_value_goods <> 0 in this file).
+UPDATE payment_mapping_rules
+   SET to_summary_field_when_positive_amount = 'refunded_expenses', to_summary_field_when_negative_amount = 'refunded_expenses'
+ WHERE src_line = 4 AND transaction_type = 'REFUND' AND description = 'any' AND amount_field = 'low_value_goods';
+
+-- ---------------------------------------------------------------------------
+-- D9  Refund tax: positive amounts routed to a field with no Summary line
+--                                                         [settlement config]
+-- ---------------------------------------------------------------------------
+-- Rule: settlement config line 4
+--     REFUND,ITEMPRICE,TAX,txn_ref+sku+date,total_refund_expense_or_sales_amt,refunded_expenses
+--   The sign split sends the same component to two different places, one of them
+--   off the Summary. Every other refund tax component (SHIPPINGTAX line 11,
+--   GIFTWRAPTAX line 12, PROMOTION TAXDISCOUNT line 20) is refunded_expenses on
+--   both signs, and so is the payments side after D7.
+-- Change: positive bucket -> refunded_expenses.  Moves: 0.00 (all 13 Refund /
+--   ItemPrice / Tax lines in this file are negative).
+UPDATE settlement_mapping_rules
+   SET to_summary_field_when_positive_amount = 'refunded_expenses'
+ WHERE src_line = 4 AND transaction_type = 'REFUND' AND amount_type = 'ITEMPRICE' AND amount_description = 'TAX'
+   AND to_summary_field_when_positive_amount = 'total_refund_expense_or_sales_amt';
+
+-- ---------------------------------------------------------------------------
+-- D10 PROMOTION_ADJUSTMENT builds a record_ref no payment row can produce
+--                                                         [settlement config]
+-- ---------------------------------------------------------------------------
+-- Rule: settlement config line 138
+--     OTHER-TRANSACTION,OTHER-TRANSACTION,PROMOTION_ADJUSTMENT,
+--     ADJUSTMENT_OTHER+settlement_id+date+record_type+settlement_id, ...
+--   settlement_id appears twice and record_type is appended, so the key can never
+--   equal ADJUSTMENT_OTHER+settlement_id+date, the key of the same family on both
+--   sides (payments lines 2, 38/39, 150; settlement MISCADJUSTMENT line 28): every
+--   such line would be a false unreconciled settlement.
+-- Change: record_ref -> ADJUSTMENT_OTHER+settlement_id+date.  Moves: 0.00 (no
+--   PROMOTION_ADJUSTMENT line in this file); reconciliation only, no Summary effect.
+UPDATE settlement_mapping_rules
+   SET record_ref = 'ADJUSTMENT_OTHER+settlement_id+date'
+ WHERE src_line = 138 AND transaction_type = 'OTHER-TRANSACTION' AND amount_type = 'OTHER-TRANSACTION'
+   AND amount_description = 'PROMOTION_ADJUSTMENT';
+
+-- ---------------------------------------------------------------------------
+-- D11 FBA inventory fee correction: negative amounts silently dropped
+--                                                            [payments config]
+-- ---------------------------------------------------------------------------
+-- Rule: payments config line 31
+--     ADJUSTMENT,FBA_INVENTORY_REIMBURSEMENT_-_FEE_CORRECTION,other,...,sales_other,
+--   Positive corrections go to Sales / Other, negative ones to no bucket at all.
+-- Change: negative bucket -> expenses_other (the sales_other / expenses_other pair
+--   used for two-sided adjustments, e.g. SHIPPING_SERVICES,ADJUSTMENT line 108).
+--   Moves: 0.00 (no fee-correction row in this file).
+UPDATE payment_mapping_rules
+   SET to_summary_field_when_negative_amount = 'expenses_other'
+ WHERE src_line = 31 AND transaction_type = 'ADJUSTMENT' AND description = 'FBA_INVENTORY_REIMBURSEMENT_-_FEE_CORRECTION'
+   AND amount_field = 'other' AND to_summary_field_when_negative_amount = '';
+
+-- ---------------------------------------------------------------------------
+-- D12 Long-term storage fee key spelled with "_" instead of "-"
+--                                                         [settlement config]
+-- ---------------------------------------------------------------------------
+-- Rules: settlement config lines 134/135
+--     FBAFEES,FBA_LONG_TERM_STORAGE_FEE,BASE_FEE / TAX_ON_FEE, record_ref
+--     FBA_INVENTORY_FEE_FBA_LONG-TERM_STORAGE_FEE+settlement_id+date
+--   Every other spelling of this fee in both configs - including these rules' own
+--   record_ref and payments lines 50/51, 146/148 - is LONG-TERM, which is what a
+--   source value "Long-Term" normalises to (hyphens are kept: OTHER-TRANSACTION,
+--   SAFE-T, A-TO-Z depend on that). With "_" the rules would never match and the
+--   fee would be unmapped.
+-- Change: amount_type -> FBA_LONG-TERM_STORAGE_FEE.  Moves: 0.00 (no long-term
+--   storage fee in this file, so the raw spelling could not be confirmed here).
+UPDATE settlement_mapping_rules
+   SET amount_type = 'FBA_LONG-TERM_STORAGE_FEE'
+ WHERE src_line IN (134, 135) AND transaction_type = 'FBAFEES' AND amount_type = 'FBA_LONG_TERM_STORAGE_FEE';
+
+-- ===========================================================================
+-- Not config defects: matching logic, timing, and what cannot be closed.
+-- No SQL in these blocks.
+-- ===========================================================================
+
+-- ---------------------------------------------------------------------------
+-- D-M1 record_ref "date" of a payment row = Transaction Release Date (UTC)
+--                                          [matching logic, internal/mapping/refdate.go]
+-- ---------------------------------------------------------------------------
+-- The configs only say "date". Settlement rows use posted-date. For payment rows,
+-- date/time is the order date; it differs from the settlement posted date on
+-- 13,328 of 13,353 Released order rows and 38 of 73 refund rows of settlement
+-- 12395580393. Built from date/time, only 34 of 13,310 order/refund keys would
+-- exist in the settlement file; built from the UTC date of Transaction Release
+-- Date (the moment the money was posted to the settlement) all 13,289 reconcile.
+-- Rows with no release date (Deferred) fall back to date/time.
+
+-- ---------------------------------------------------------------------------
+-- D-M2 Deferred payment rows are not part of this settlement     [timing; report]
+-- ---------------------------------------------------------------------------
+-- 2,398 payment rows (2,392 Order, 6 Refund) carry settlement id 12395580393 with
+-- Transaction status Deferred and no release date: 43,540.07, posted 18-31 Jul
+-- 2026. None of their 2,381 record_refs exists in the settlement file (the 3 whose
+-- order id does appear there are other SKUs of the same order). Released rows of
+-- the same id sum to 78,362.44, and 78,362.44 + 133,756.51 (the transfer, D-M3) =
+-- 212,118.95 = Amazon's total-amount, so the deferred money is not in this
+-- settlement; it is released into a later one. Cannot be closed with these files.
+-- The Summary sheet shows it per line in column F; the records are listed as
+-- unreconciled payments with reason "Deferred".
+
+-- ---------------------------------------------------------------------------
+-- D-M3 Payout transfer has no settlement line                       [cannot close]
+-- ---------------------------------------------------------------------------
+-- amazon_payments_data.csv line 16605 (-133,756.51, "To account ending with: 334",
+-- 18 Jul 2026) is the bank payout made during this settlement period. The flat
+-- settlement file lists amounts that make up the settlement, not disbursements,
+-- so there is no line to match: 1 unreconciled payment, by construction. After D1
+-- it is not summarised on any line.
+
+-- ---------------------------------------------------------------------------
+-- D-M4 Zero-value order lines                                       [cannot close]
+-- ---------------------------------------------------------------------------
+-- 25 Released Order rows of settlement 12395580393 have every amount column = 0
+-- (e.g. lines 16266, 16267, 20412). No money moved, so Amazon posts no settlement
+-- line and none of these order ids appears in the settlement file: 25 unreconciled
+-- payments of 0.00 each.
+
+-- ---------------------------------------------------------------------------
+-- D-M5 Rows of other settlement ids                                  [out of scope]
+-- ---------------------------------------------------------------------------
+-- 7,156 payment rows belong to settlements 12370691583 (14), 12382593803 (5,649)
+-- and 12407469483 (1,493): 28,306.64. The settlement file only covers 12395580393,
+-- so they are kept, mapped and listed on "Out of Scope Payments" (7,041 records),
+-- not counted as unreconciled. The fixes above change their routing too.
+
+-- ---------------------------------------------------------------------------
+-- D-X1 GST by base line is not expressible for payments          [schema change]
+-- ---------------------------------------------------------------------------
+-- If the business wants GST inside Product Charges / Shipping / Other (as the
+-- settlement config originally had it) instead of on the Tax line (D5), the payment
+-- side cannot do it: a payments rule maps one whole column to one bucket, and the
+-- report has a single sales_tax_collected column. That would need a schema change,
+-- e.g. an allocation rule type (payment column split by the settlement components
+-- of the same record_ref) or a payments source that reports tax per component.
+
+-- ---------------------------------------------------------------------------
+-- D-X2 Catch-all and fields without a Summary line            [observation only]
+-- ---------------------------------------------------------------------------
+-- The payments catch-all (line 110, ,any,total -> expenses_amazon_fees) is what
+-- turned D1 into a 133k "Amazon fee". After D1 no row reaches it; it is left as
+-- provided because it is the documented fallback, and the pipeline now reports
+-- every amount it summarises (check fallback_rule_routed). Several rules route to
+-- fields with no Summary line (total_refund_expense_or_sales_amt,
+-- total_adjustment_other_buyer_recharge_amt, current_reserve_amount,
+-- beginning_balance, amazon_carried_forward); both configs agree on them, no row
+-- in these files uses them, and if one does it is reported by check
+-- routed_fields_on_summary and on the Summary tie-out block instead of vanishing.
+-- Choosing their Summary line is a product decision, not a defect fix.
+
+-- ---------------------------------------------------------------------------
+-- Ruled out: FBA per-unit fulfilment fee on "Amazon fees" instead of "FBA fees"
+-- ---------------------------------------------------------------------------
+-- Both configs route it to expenses_amazon_fees (payments line 73, settlement line
+-- 67). The payments fba_fees column also contains the shipping and gift-wrap
+-- chargebacks (-1,198.94 and -11.97 here), which the settlement config also routes
+-- to expenses_amazon_fees, so moving only the per-unit fee would open a gap that
+-- the payments side cannot follow. Consistent on both sides; not changed.
+
+-- ---------------------------------------------------------------------------
+-- Guard: abort (and roll back everything above) if any targeted rule was missing.
+-- ---------------------------------------------------------------------------
+DO $$
+DECLARE
+    bad text[] := ARRAY[]::text[];
+BEGIN
+    IF (SELECT count(*) FROM payment_mapping_rules WHERE transaction_type = 'TRANSFER' AND description = 'any') <> 2 THEN bad := array_append(bad, 'D1'); END IF;
+    IF NOT EXISTS (SELECT 1 FROM payment_mapping_rules WHERE src_line = 65 AND to_summary_field_when_negative_amount = 'expenses_promotional_rebates') THEN bad := array_append(bad, 'D2'); END IF;
+    IF EXISTS (SELECT 1 FROM payment_mapping_rules WHERE src_line = 72) THEN bad := array_append(bad, 'D3'); END IF;
+    IF EXISTS (SELECT 1 FROM payment_mapping_rules WHERE src_line = 5) THEN bad := array_append(bad, 'D4'); END IF;
+    IF (SELECT count(*) FROM payment_mapping_rules WHERE src_line IN (71, 6) AND to_summary_field_when_positive_amount = 'sales_tax') <> 2
+       OR (SELECT count(*) FROM settlement_mapping_rules WHERE to_summary_field_when_positive_amount = 'sales_tax' AND transaction_type = 'ORDER') <> 7 THEN bad := array_append(bad, 'D5'); END IF;
+    IF NOT EXISTS (SELECT 1 FROM payment_mapping_rules WHERE src_line = 70 AND to_summary_field_when_positive_amount = 'sales_other') THEN bad := array_append(bad, 'D6'); END IF;
+    IF NOT EXISTS (SELECT 1 FROM payment_mapping_rules WHERE src_line = 14 AND to_summary_field_when_negative_amount = 'refunded_expenses') THEN bad := array_append(bad, 'D7'); END IF;
+    IF NOT EXISTS (SELECT 1 FROM payment_mapping_rules WHERE src_line = 4 AND to_summary_field_when_negative_amount = 'refunded_expenses') THEN bad := array_append(bad, 'D8'); END IF;
+    IF NOT EXISTS (SELECT 1 FROM settlement_mapping_rules WHERE src_line = 4 AND to_summary_field_when_positive_amount = 'refunded_expenses') THEN bad := array_append(bad, 'D9'); END IF;
+    IF NOT EXISTS (SELECT 1 FROM settlement_mapping_rules WHERE src_line = 138 AND record_ref = 'ADJUSTMENT_OTHER+settlement_id+date') THEN bad := array_append(bad, 'D10'); END IF;
+    IF NOT EXISTS (SELECT 1 FROM payment_mapping_rules WHERE src_line = 31 AND to_summary_field_when_negative_amount = 'expenses_other') THEN bad := array_append(bad, 'D11'); END IF;
+    IF (SELECT count(*) FROM settlement_mapping_rules WHERE src_line IN (134, 135) AND amount_type = 'FBA_LONG-TERM_STORAGE_FEE') <> 2 THEN bad := array_append(bad, 'D12'); END IF;
+    IF cardinality(bad) > 0 THEN
+        RAISE EXCEPTION 'MAPPING_FIXES.sql: fixes not applied as expected: % (were the configs reloaded first?)', bad;
+    END IF;
+END $$;
+
 COMMIT;

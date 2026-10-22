@@ -190,3 +190,55 @@ then confirm row by row on reconciled record_refs.
   Chose (b).
 - Fix D5 → Product Charges, Shipping, Tax all **0.00**; Sales / Other now −11.61 (D6 only);
   `reconciled_fields_agree` 819 → 19 records.
+
+## 9. D6 + D7 — gift wrap off the Summary (−11.61) and refund GST not summarised (+42.59)
+
+- `reconciled_fields_agree` now listed exactly 19 records; grouped by field they are two causes:
+  - 3 records, `sales_gift_wrap_credits` 11.61 (P) vs `sales_other` 11.61 (S): payment lines
+    5955, 14054, 14269 vs settlement lines 24104, 31121, 50305 (`ItemPrice/GiftWrap`). Payments
+    rule line 70 routes gift wrap to a field no Summary line reads (`routed_fields_on_summary`
+    flagged it from the first run).
+  - 16 records, `refunded_expenses` P 88.34 vs S 45.75 (+42.59): refund rows' `sales_tax_collected`
+    (−42.59, first line 14661) is not summarised (payments rule line 14, both buckets empty)
+    while the settlement side routes `Refund ItemPrice/Tax −41.09 + ShippingTax −3.19 + Promotion/
+    TaxDiscount +1.69 = −42.59` to `refunded_expenses`.
+- Fix D6 (gift wrap → `sales_other`) and D7 (refund tax → `refunded_expenses`) → every Summary line
+  **0.00**, `reconciled_fields_agree` **0 records**, net of Summary lines = 212,118.95 on both
+  sides = Amazon total-amount. All 11 self-checks pass.
+
+## 10. Latent defects (no row hits them here, 0.00 moved)
+
+Read every rule against its siblings in both configs after the numbers tied, because a tie only
+proves the rules that *these* rows hit:
+
+- D8 payments `REFUND low_value_goods` (line 4) not summarised; settlement `REFUND ITEMWITHHELDTAX
+  any` → refunded_expenses. Same gap as D7.
+- D9 settlement `REFUND ITEMPRICE TAX` (line 4): positive → `total_refund_expense_or_sales_amt`
+  (no Summary line), negative → refunded_expenses. All 13 lines here are negative.
+- D10 settlement `PROMOTION_ADJUSTMENT` (line 138) record_ref
+  `ADJUSTMENT_OTHER+settlement_id+date+record_type+settlement_id` can never equal the family key
+  `ADJUSTMENT_OTHER+settlement_id+date` → would be a false unreconciled settlement.
+- D11 payments `FEE_CORRECTION other` (line 31): negative bucket empty → negative corrections vanish.
+- D12 settlement `FBA_LONG_TERM_STORAGE_FEE` (lines 134/135) uses `_` where every other spelling,
+  including the rule's own record_ref, is `LONG-TERM` → would never match.
+
+Looked at and not changed (reasons in MAPPING_FIXES.sql): the catch-all line 110 (no row reaches
+it after D1; now reported by `fallback_rule_routed`), buckets with no Summary line that both
+configs agree on (no rows), and FBA per-unit fees on Amazon fees (consistent on both sides; the
+payments `fba_fees` column also holds chargebacks, so moving it would open a gap).
+
+## 11. What remains, and why it cannot be closed
+
+After-fix counts (settlement 12395580393): **reconciled 13,289 · unreconciled payment 2,407 ·
+unreconciled settlement 0** (7,041 out-of-scope payment records of other settlement ids).
+
+| Remaining item | Records | Amount | Why it stays |
+|---|---:|---:|---|
+| Deferred payment rows (D-M2) | 2,381 | 43,540.07 | Not released; no release date; no settlement line. Released + transfer = 212,118.95 proves they are outside this settlement. Shown per line in Summary column F. The 3 whose order id is in the settlement file are other SKUs of the same order (checked). |
+| Payout transfer, line 16605 (D-M3) | 1 | −133,756.51 | A disbursement, not a settlement line; not summarised after D1. It is the only item between "net amount per source" (78,362.44) and Amazon's total (212,118.95). |
+| Zero-value order lines (D-M4) | 25 | 0.00 | All amount columns 0; Amazon posts no settlement line; none of those order ids is in the settlement file. |
+| Other settlement ids (D-M5) | 7,041 | 28,306.64 | Settlements 12370691583 / 12382593803 / 12407469483 are not in the settlement file. Listed on "Out of Scope Payments". |
+
+The Summary's Payments − Settlements column is 0.00 on every line, and on top of that: every
+reconciled record agrees field by field, nothing is routed twice, nothing reaches the catch-all,
+nothing is routed off the Summary, and both columns' net equals Amazon's 212,118.95.
