@@ -79,9 +79,9 @@ Lines not listed are 0 on both sides. Memo: in-scope `Deferred` payment rows tot
 
 First observations from `recon diagnose` (leads to investigate, not yet conclusions):
 
-- Two payment rule pairs apply to the same column: `ORDER,any,sales_tax_collected` (rules 70/71 →
+- Two payment rule pairs apply to the same column: `ORDER,any,sales_tax_collected` (config lines 71/72 →
   `sales_product_charges` and `sales_shipping`, 9,121 rows, 24,243.29 counted twice) and
-  `ORDER,any,low_value_goods` (rules 4/5, 86 rows, −341.93 counted twice).
+  `ORDER,any,low_value_goods` (config lines 6/5, 86 rows, −341.93 counted twice).
 - The payout `Transfer` rows (`To account ending with: 334`) do not match the config keys
   `TO_ACCOUNT_ENDING` / `TO_YOUR_ACCOUNT_ENDING`; they fall through to the catch-all
   `,any,total → expenses_amazon_fees` and build a key with an empty `txn_ref`.
@@ -152,8 +152,8 @@ then confirm row by row on reconciled record_refs.
   Other −11,273.53): a routing difference, not missing money.
 - Settlement side: `Order / Promotion / Principal` −4,098.30 + `Order / Promotion / Shipping`
   −7,175.23 = −11,273.53 → `expenses_promotional_rebates` (settlement config lines 72/73).
-  Payment side: column `promotional_rebates` of 3,983 Released order rows = −11,273.53 → rule
-  line 65 → `expenses_other`. Equal to the cent.
+  Payment side: column `promotional_rebates` of 3,983 Released order rows = −11,273.53 → payments
+  config line 65 → `expenses_other`. Equal to the cent.
 - Ruled out: the settlement rule being the wrong one — the Summary has a dedicated "Promo rebates"
   line and the payments config itself routes refunded promotions to the refund promo family.
 - Fix D2 → Promo rebates and Expenses / Other both **0.00**; `reconciled_fields_agree` drops from
@@ -163,17 +163,20 @@ then confirm row by row on reconciled record_refs.
 
 - `amount_routed_once` named the rows: the same `(row, column)` routed by two rules. Two pairs
   in the payments config, both in the `ORDER,any` group:
-  `sales_tax_collected` (lines 71 → Product Charges and 72 → Shipping) and `low_value_goods`
-  (lines 6 → Product Charges and 5 → Shipping).
+  `sales_tax_collected` (config lines 71 → Product Charges and 72 → Shipping) and `low_value_goods`
+  (config lines 6 → Product Charges and 5 → Shipping).
 - Shipping variance decomposed exactly: duplicate tax +13,675.59 + duplicate LVG −196.62 +
   (shipping-tax split, D5) +93.20 = **+13,572.17**.
 - Ruled out "the second rule is meant for the shipping part of the tax": a column rule applies
   to the whole column; there is no way for it to take only the shipping share, so it can only
   double count.
-- Fix D3 + D4 (delete lines 72 and 5) → Shipping +13,572.17 → +93.20; `amount_routed_once` passes;
+- Fix D3 + D4 (delete config lines 72 and 5) → Shipping +13,572.17 → +93.20; `amount_routed_once` passes;
   `reconciled_fields_agree` 5,159 → 819 records.
 
 ## 8. D5 — GST split per component on the settlement side (−92.84 / +93.20 / −0.36)
+
+*Superseded by §12: D5 is no longer part of MAPPING_FIXES.sql; option (b) is shipped as
+MAPPING_FIXES_OPTION_GST.sql.*
 
 - What was left nets to zero inside Sales: Product Charges −92.84, Shipping +93.20, Other −0.36.
 - Hypothesis: the payments `sales_tax_collected` column is the sum of four settlement components.
@@ -183,7 +186,7 @@ then confirm row by row on reconciled record_refs.
   `low_value_goods` = Σ `LowValueGoodsTax-Principal + -Shipping` (0 mismatches; −196.62).
 - So: ShippingTax 581.68 + GiftWrapTax 0.36 + TaxDiscount −672.16 + LVG-Shipping −2.72 = −92.84
   goes to Shipping / Other on the settlement side and can only go to one bucket on the payment
-  side. Promotion/TaxDiscount → Shipping (line 95) is wrong on its own too: it is the tax
+  side. Promotion/TaxDiscount → Shipping (settlement config line 95) is wrong on its own too: it is the tax
   discount of principal *and* shipping promotions.
 - Options: (a) point the settlement tax components at Product Charges — ties, but books shipping
   and gift-wrap GST as product revenue; (b) route all order GST to the Summary's **Sales / Tax**
@@ -195,13 +198,18 @@ then confirm row by row on reconciled record_refs.
 
 ## 9. D6 + D7 — gift wrap off the Summary (−11.61) and refund GST not summarised (+42.59)
 
+*Superseded in part by §12: the record counts here (19 records, then 0) and the closing
+statement ("every Summary line 0.00", "`reconciled_fields_agree` 0 records", "All 11 self-checks
+pass") describe the run with D5 applied, which is now the GST option (`make after-gst`). The D6
+and D7 fixes themselves are unchanged. For the main after-fix result (`make after`) see §12.*
+
 - `reconciled_fields_agree` now listed exactly 19 records; grouped by field they are two causes:
   - 3 records, `sales_gift_wrap_credits` 11.61 (P) vs `sales_other` 11.61 (S): payment lines
     5955, 14054, 14269 vs settlement lines 24104, 31121, 50305 (`ItemPrice/GiftWrap`). Payments
-    rule line 70 routes gift wrap to a field no Summary line reads (`routed_fields_on_summary`
+    config line 70 routes gift wrap to a field no Summary line reads (`routed_fields_on_summary`
     flagged it from the first run).
   - 16 records, `refunded_expenses` P 88.34 vs S 45.75 (+42.59): refund rows' `sales_tax_collected`
-    (−42.59, first line 14661) is not summarised (payments rule line 14, both buckets empty)
+    (−42.59, first line 14661) is not summarised (payments config line 14, both buckets empty)
     while the settlement side routes `Refund ItemPrice/Tax −41.09 + ShippingTax −3.19 + Promotion/
     TaxDiscount +1.69 = −42.59` to `refunded_expenses`.
 - Fix D6 (gift wrap → `sales_other`) and D7 (refund tax → `refunded_expenses`) → every Summary line
@@ -213,23 +221,28 @@ then confirm row by row on reconciled record_refs.
 Read every rule against its siblings in both configs after the numbers tied, because a tie only
 proves the rules that *these* rows hit:
 
-- D8 payments `REFUND low_value_goods` (line 4) not summarised; settlement `REFUND ITEMWITHHELDTAX
+- D8 payments `REFUND low_value_goods` (payments config line 4) not summarised; settlement `REFUND ITEMWITHHELDTAX
   any` → refunded_expenses. Same gap as D7.
-- D9 settlement `REFUND ITEMPRICE TAX` (line 4): positive → `total_refund_expense_or_sales_amt`
+- D9 settlement `REFUND ITEMPRICE TAX` (settlement config line 4): positive → `total_refund_expense_or_sales_amt`
   (no Summary line), negative → refunded_expenses. All 13 lines here are negative.
-- D10 settlement `PROMOTION_ADJUSTMENT` (line 138) record_ref
+- D10 settlement `PROMOTION_ADJUSTMENT` (settlement config line 138) record_ref
   `ADJUSTMENT_OTHER+settlement_id+date+record_type+settlement_id` can never equal the family key
   `ADJUSTMENT_OTHER+settlement_id+date` → would be a false unreconciled settlement.
-- D11 payments `FEE_CORRECTION other` (line 31): negative bucket empty → negative corrections vanish.
-- D12 settlement `FBA_LONG_TERM_STORAGE_FEE` (lines 134/135) uses `_` where every other spelling,
+- D11 payments `FEE_CORRECTION other` (payments config line 31): negative bucket empty → negative corrections vanish.
+- D12 settlement `FBA_LONG_TERM_STORAGE_FEE` (settlement config lines 134/135) uses `_` where every other spelling,
   including the rule's own record_ref, is `LONG-TERM` → would never match.
 
-Looked at and not changed (reasons in MAPPING_FIXES.sql): the catch-all line 110 (no row reaches
+Looked at and not changed (reasons in MAPPING_FIXES.sql): the catch-all, payments config line 110 (no row reaches
 it after D1; now reported by `fallback_rule_routed`), buckets with no Summary line that both
 configs agree on (no rows), and FBA per-unit fees on Amazon fees (consistent on both sides; the
 payments `fba_fees` column also holds chargebacks, so moving it would open a gap).
 
 ## 11. What remains, and why it cannot be closed
+
+*Superseded in part by §12: the counts and the table below still hold. The closing paragraph
+("0.00 on every line", "every reconciled record agrees field by field") describes the run with D5
+applied, which is now the GST option (`make after-gst`). The main after-fix result keeps the D5 GST
+residual inside Sales; see §12.*
 
 After-fix counts (settlement 12395580393): **reconciled 13,289 · unreconciled payment 2,407 ·
 unreconciled settlement 0** (7,041 out-of-scope payment records of other settlement ids).
@@ -288,7 +301,8 @@ Main after-fix report (`reports/report_after_fix.xlsx`), Released, P − S:
 Every other line is 0.00. The residual is exactly the settlement GST components outside Product
 Charges: ShippingTax 581.68 + GiftWrapTax 0.36 + Promotion/TaxDiscount −672.16 +
 LowValueGoodsTax-Shipping −2.72 = −92.84 (component totals queried from `source_rows`). In the GST
-option report every line is 0.00.
+option report (`reports/report_after_fix_gst_option.xlsx`, `make after-gst`) every line is 0.00,
+reconciled_fields_agree finds 0 records, and all 11 self-checks pass (`make after-gst` exits 0).
 
 Self-checks in `make after`: only `reconciled_fields_agree` fails, on 805 reconciled records with
 1,610 record × field differences. Every other check passes, including `amount_routed_once`,
