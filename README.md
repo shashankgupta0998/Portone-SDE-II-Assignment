@@ -102,7 +102,8 @@ bin/recon report    --out reports/report_after_fix.xlsx
 
 `bin/recon run --payments … --settlements … --out … --label …` does ingest + reconcile + report in one
 command. `recon` exits non-zero if any self-check fails (the report is still written so the failure
-can be inspected).
+can be inspected). `make before` ignores that exit code on purpose: with the configs as provided,
+`amount_routed_once` and `reconciled_fields_agree` fail — that is the finding. `make after` does not.
 
 ### Auditing a number
 
