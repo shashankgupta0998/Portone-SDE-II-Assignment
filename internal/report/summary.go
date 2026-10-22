@@ -44,7 +44,9 @@ func writeSummary(f *excelize.File, st styles, run RunInfo, d *summaryData) erro
 		return nil
 	}
 
-	for _, h := range []struct{ c, v string }{{"C1", "Payments"}, {"D1", "Settlements"}, {"E1", "Payments - Settlements"}} {
+	deferredCol := func(row int, v decimal.Decimal, style int) error { return set(cell("F", row), money(v), style) }
+	for _, h := range []struct{ c, v string }{{"C1", "Payments"}, {"D1", "Settlements"}, {"E1", "Payments - Settlements"},
+		{"F1", "Memo: Payments Deferred (not in C)"}} {
 		if err := set(h.c, h.v, st.bold); err != nil {
 			return err
 		}
@@ -59,7 +61,7 @@ func writeSummary(f *excelize.File, st styles, run RunInfo, d *summaryData) erro
 	for _, sec := range sections {
 		headerRow := row
 		row++
-		subP, subS := decimal.Zero, decimal.Zero
+		subP, subS, subD := decimal.Zero, decimal.Zero, decimal.Zero
 		for _, l := range d.lines {
 			if l.Section != sec {
 				continue
@@ -70,13 +72,19 @@ func writeSummary(f *excelize.File, st styles, run RunInfo, d *summaryData) erro
 			if err := values(row, pay[l.Field], settle[l.Field], st.money); err != nil {
 				return err
 			}
-			subP, subS = subP.Add(pay[l.Field]), subS.Add(settle[l.Field])
+			if err := deferredCol(row, d.deferredBy[l.Field], st.money); err != nil {
+				return err
+			}
+			subP, subS, subD = subP.Add(pay[l.Field]), subS.Add(settle[l.Field]), subD.Add(d.deferredBy[l.Field])
 			row++
 		}
 		if err := set(cell("B", headerRow), sec, st.indent2Bold); err != nil {
 			return err
 		}
 		if err := values(headerRow, subP, subS, st.moneyBold); err != nil {
+			return err
+		}
+		if err := deferredCol(headerRow, subD, st.moneyBold); err != nil {
 			return err
 		}
 		totalP, totalS = totalP.Add(subP), totalS.Add(subS)
@@ -99,6 +107,9 @@ func writeSummary(f *excelize.File, st styles, run RunInfo, d *summaryData) erro
 			return err
 		}
 		if err := values(row, pay[l.Field], settle[l.Field], st.money); err != nil {
+			return err
+		}
+		if err := deferredCol(row, d.deferredBy[l.Field], st.money); err != nil {
 			return err
 		}
 		totalP, totalS = totalP.Add(pay[l.Field]), totalS.Add(settle[l.Field])
@@ -136,6 +147,7 @@ func writeSummary(f *excelize.File, st styles, run RunInfo, d *summaryData) erro
 	if err := values(row, totalP, totalS, st.moneyBold); err != nil {
 		return err
 	}
+	netLinesRow := row
 	routedP, routedS := totalP, totalS
 	row++
 	for _, fld := range extra {
@@ -172,7 +184,14 @@ func writeSummary(f *excelize.File, st styles, run RunInfo, d *summaryData) erro
 		return err
 	}
 	row++
-	if err := set(cell("B", row), "Net amount - Amazon total-amount", st.bold); err != nil {
+	if err := set(cell("B", row), fmt.Sprintf("Net of Summary lines (row %d) - Amazon total-amount", netLinesRow), st.bold); err != nil {
+		return err
+	}
+	if err := values(row, totalP.Sub(d.headerTotal), totalS.Sub(d.headerTotal), st.moneyBold); err != nil {
+		return err
+	}
+	row++
+	if err := set(cell("B", row), "Net amount per source - Amazon total-amount", st.bold); err != nil {
 		return err
 	}
 	if err := values(row, d.net.payments.Sub(d.headerTotal), d.net.settlements.Sub(d.headerTotal), st.moneyBold); err != nil {
@@ -183,7 +202,7 @@ func writeSummary(f *excelize.File, st styles, run RunInfo, d *summaryData) erro
 		label string
 		v     decimal.Decimal
 	}{
-		{"Memo: in-scope payment rows with Transaction status = Deferred (sum of total, included above)", d.deferred},
+		{"Memo: in-scope payment rows with Transaction status = Deferred (sum of total; not released into this settlement, excluded from the Payments column, per line in column F)", d.deferred},
 		{fmt.Sprintf("Memo: payment rows of other settlement ids, %d rows (sum of total, excluded; see Out of Scope Payments)", d.outOfScopeN), d.outOfScope},
 	}
 	for _, m := range memos {
@@ -196,7 +215,8 @@ func writeSummary(f *excelize.File, st styles, run RunInfo, d *summaryData) erro
 		row++
 	}
 	row++
-	note := fmt.Sprintf("Run %d (%s). Scope: settlement %s. Payments column = payment records only; Settlements column = settlement records only. "+
+	note := fmt.Sprintf("Run %d (%s). Scope: settlement %s. Payments column = payment records of this settlement id with Transaction status Released; "+
+		"Settlements column = settlement records only. "+
 		"Values are sums of mapped components streamed during ingestion; no manual adjustments.",
 		run.ID, run.Label, strings.Join(run.Scope, ", "))
 	if err := set(cell("B", row), note, st.note); err != nil {
@@ -209,7 +229,7 @@ func writeSummary(f *excelize.File, st styles, run RunInfo, d *summaryData) erro
 	if err := f.SetColWidth(sh, "B", "B", 70); err != nil {
 		return err
 	}
-	return f.SetColWidth(sh, "C", "E", 22)
+	return f.SetColWidth(sh, "C", "F", 22)
 }
 
 func contains(xs []string, s string) bool {

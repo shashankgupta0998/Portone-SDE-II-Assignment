@@ -150,8 +150,10 @@ func TestEndToEnd(t *testing.T) {
 			t.Errorf("Summary %s = %q, want %q", c, v, want)
 		}
 	}
-	// Payments Product Charges: 20 + 10 + 10 + 15 (deferred, in scope) = 55; Settlements: 20 + 20 = 40
-	for c, want := range map[string]string{"C5": "55.00", "D5": "40.00", "E5": "15.00", "D17": "-20.00"} {
+	// Payments Product Charges: 20 + 10 + 10 (Released) = 40, the deferred 15 is shown in F;
+	// Settlements: 20 + 20 = 40
+	for c, want := range map[string]string{"C5": "40.00", "D5": "40.00", "E5": "0.00", "F5": "15.00", "D17": "-20.00",
+		"F1": "Memo: Payments Deferred (not in C)"} {
 		if v, _ := f.GetCellValue(report.SheetSummary, c); v != want {
 			t.Errorf("Summary %s = %q, want %q", c, v, want)
 		}

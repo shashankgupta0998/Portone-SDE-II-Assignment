@@ -36,7 +36,7 @@ db-down:
 # Configs exactly as provided -> reports/report_before_fix.xlsx
 before: build
 	$(BIN) load-config --payments-config $(PAY_CFG) --settlement-config $(SET_CFG)
-	$(BIN) run --payments $(PAY) --settlements $(SET) --label before-fix --out reports/report_before_fix.xlsx
+	-$(BIN) run --payments $(PAY) --settlements $(SET) --label before-fix --out reports/report_before_fix.xlsx
 
 # Configs as provided + MAPPING_FIXES.sql applied to the rule tables -> reports/report_after_fix.xlsx
 after: build

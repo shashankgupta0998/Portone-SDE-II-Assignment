@@ -41,8 +41,9 @@ type sourceTotals struct {
 // summaryData is everything the Summary sheet shows.
 type summaryData struct {
 	lines        []SummaryLine
-	routed       map[string]map[string]decimal.Decimal // source -> field -> amount (streamed, in scope)
-	net          sourceTotals                          // payments: sum(total); settlements: sum(amount)
+	routed       map[string]map[string]decimal.Decimal // source -> field -> amount (streamed, in scope, Released)
+	deferredBy   map[string]decimal.Decimal            // field -> in-scope Deferred payment amount (streamed)
+	net          sourceTotals                          // payments: sum(total) of Released rows; settlements: sum(amount)
 	headerTotal  decimal.Decimal                       // Amazon's settlement total-amount
 	deferred     decimal.Decimal                       // in-scope payments with status Deferred, sum(total)
 	outOfScope   decimal.Decimal                       // payments of other settlement ids, sum(total)
@@ -80,6 +81,7 @@ func loadRun(ctx context.Context, pool *pgxpool.Pool, runID int64) (RunInfo, err
 func loadSummary(ctx context.Context, pool *pgxpool.Pool, run RunInfo) (*summaryData, error) {
 	d := &summaryData{
 		routed:     map[string]map[string]decimal.Decimal{"payments": {}, "settlements": {}},
+		deferredBy: map[string]decimal.Decimal{},
 		fileNames:  map[string]string{},
 		headerByID: map[string]map[string]string{},
 	}
@@ -100,16 +102,24 @@ func loadSummary(ctx context.Context, pool *pgxpool.Pool, run RunInfo) (*summary
 	d.consolidated = d.lines
 
 	// Summary values come from the totals streamed during ingestion (cross-checked against SQL
-	// by the stream_summary_equals_sql self-check).
-	rows, err = pool.Query(ctx, `SELECT source, summary_field, sum(amount)::text FROM stream_summary
-		WHERE run_id = $1 AND settlement_id = ANY($2::text[]) GROUP BY 1, 2`, run.ID, run.Scope)
+	// by the stream_summary_equals_sql self-check). Payment rows with Transaction status
+	// "Deferred" carry the settlement id but have not been released into that settlement (no
+	// release date, no settlement line); they are kept apart from the Payments column and shown
+	// next to it.
+	rows, err = pool.Query(ctx, `SELECT source, txn_status = 'Deferred', summary_field, sum(amount)::text FROM stream_summary
+		WHERE run_id = $1 AND settlement_id = ANY($2::text[]) GROUP BY 1, 2, 3`, run.ID, run.Scope)
 	if err != nil {
 		return nil, err
 	}
 	for rows.Next() {
 		var src, field, amt string
-		if err := rows.Scan(&src, &field, &amt); err != nil {
+		var deferred bool
+		if err := rows.Scan(&src, &deferred, &field, &amt); err != nil {
 			return nil, err
+		}
+		if deferred {
+			d.deferredBy[field] = dec(amt)
+			continue
 		}
 		d.routed[src][field] = dec(amt)
 	}
@@ -119,7 +129,7 @@ func loadSummary(ctx context.Context, pool *pgxpool.Pool, run RunInfo) (*summary
 
 	var pay, set, hdr, deferred, oos string
 	err = pool.QueryRow(ctx, `SELECT
-		COALESCE(sum(total)  FILTER (WHERE source = 'payments'    AND row_kind = 'data' AND settlement_id = ANY($1::text[])), 0)::text,
+		COALESCE(sum(total)  FILTER (WHERE source = 'payments'    AND row_kind = 'data' AND settlement_id = ANY($1::text[]) AND txn_status IS DISTINCT FROM 'Deferred'), 0)::text,
 		COALESCE(sum(amount) FILTER (WHERE source = 'settlements' AND row_kind = 'data' AND settlement_id = ANY($1::text[])), 0)::text,
 		COALESCE(sum(total_amount) FILTER (WHERE source = 'settlements' AND row_kind = 'settlement_header' AND settlement_id = ANY($1::text[])), 0)::text,
 		COALESCE(sum(total)  FILTER (WHERE source = 'payments' AND row_kind = 'data' AND settlement_id = ANY($1::text[]) AND txn_status = 'Deferred'), 0)::text,

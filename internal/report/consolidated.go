@@ -44,7 +44,7 @@ var settlementHeaderFields = map[string]bool{
 var auditHeaders = []string{
 	"record_ref", "DS1 rows", "DS1 source lines", "DS2 rows", "DS2 source lines",
 	"DS2 amount-type / amount-description", "DS1 rule ids", "DS2 rule ids",
-	"DS1 fields not on Summary", "DS2 fields not on Summary",
+	"DS1 fields not on Summary", "DS2 fields not on Summary", "Why not reconciled",
 }
 
 var statusLabels = map[string]string{
@@ -173,7 +173,8 @@ SELECT rr.record_ref, rr.status, rr.pay_rows, rr.set_rows,
        COALESCE(rr.pay_total::text, ''), COALESCE(rr.set_total::text, ''), rr.diff_total::text,
        p.raw, COALESCE(to_char(p.ref_date, 'YYYY-MM-DD'), ''), s.raw, COALESCE(s.settlement_id, ''),
        COALESCE(rr.pay_lines, '{}'), COALESCE(rr.set_lines, '{}'),
-       COALESCE(rr.pay_rule_ids, '{}'), COALESCE(rr.set_rule_ids, '{}'), COALESCE(rr.set_amount_types, '')
+       COALESCE(rr.pay_rule_ids, '{}'), COALESCE(rr.set_rule_ids, '{}'), COALESCE(rr.set_amount_types, ''),
+       COALESCE(p.txn_status, '')
 FROM recon_records rr
 LEFT JOIN source_rows p ON p.id = rr.pay_first_row_id
 LEFT JOIN source_rows s ON s.id = rr.set_first_row_id
@@ -186,12 +187,12 @@ ORDER BY array_position($2::text[], rr.status), rr.record_ref`, run.ID, statuses
 
 	rowNum := 11
 	for rows.Next() {
-		var ref, status, payTotal, setTotal, diff, refDate, sid, setTypes string
+		var ref, status, payTotal, setTotal, diff, refDate, sid, setTypes, payStatus string
 		var payRows, setRows int
 		var praw, sraw []byte
 		var payLines, setLines, payRules, setRules []int32
 		if err := rows.Scan(&ref, &status, &payRows, &setRows, &payTotal, &setTotal, &diff, &praw, &refDate, &sraw, &sid,
-			&payLines, &setLines, &payRules, &setRules, &setTypes); err != nil {
+			&payLines, &setLines, &payRules, &setRules, &setTypes, &payStatus); err != nil {
 			return err
 		}
 		pr, sr := map[string]string{}, map[string]string{}
@@ -256,6 +257,7 @@ ORDER BY array_position($2::text[], rr.status), rr.record_ref`, run.ID, statuses
 			intList(setRules),
 			offSheet(pb, onSheet),
 			offSheet(sb, onSheet),
+			unreconciledReason(status, payStatus, dec(payTotal), pb),
 		)
 		if err := sw.SetRow(cell("A", rowNum), vals); err != nil {
 			return err
@@ -269,6 +271,32 @@ ORDER BY array_position($2::text[], rr.status), rr.record_ref`, run.ID, statuses
 		return err
 	}
 	return sw.Flush()
+}
+
+// unreconciledReason classifies a record that has no counterpart, from its own data only.
+func unreconciledReason(status, payStatus string, payTotal decimal.Decimal, pb map[string]decimal.Decimal) string {
+	switch status {
+	case "unreconciled_settlement":
+		return "No payment record with this record_ref"
+	case "unreconciled_payment":
+		routed := false
+		for _, v := range pb {
+			if !v.IsZero() {
+				routed = true
+			}
+		}
+		switch {
+		case payStatus == "Deferred":
+			return "Deferred: not yet released into a settlement (timing)"
+		case payTotal.IsZero() && !routed:
+			return "Zero-value line: no money moved, so no settlement line exists"
+		case !routed:
+			return "Amount not routed to any summary field by its rule (e.g. payout transfer); no settlement line"
+		default:
+			return "No settlement record with this record_ref"
+		}
+	}
+	return ""
 }
 
 func appendBuckets(vals []any, st styles, fields []SummaryLine, b map[string]decimal.Decimal, present bool) []any {
