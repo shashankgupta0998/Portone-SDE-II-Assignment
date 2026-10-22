@@ -11,55 +11,153 @@ input files ──► ingest (stream) ──► mapping engine ──► summary
 PostgreSQL ──► reconcile (aggregate per record_ref, FULL OUTER JOIN) ──► self-checks ──► Excel report
 ```
 
+## Interpretation choices (no clarification possible before submission)
+
+Three points in the brief can be read more than one way. For each one: the literal reading, what
+this submission does and why, and the numbers under both readings. Every figure comes from the
+committed reports or from a query against the database (queries in PROGRESS.md §12 and
+`sql/queries/`).
+
+### 1. Order GST (MAPPING_FIXES.sql D5)
+
+- **Literal reading.** Mapping defects are fixed in the config. If a fix "genuinely cannot be
+  expressed in the config schema", say so and name the schema change.
+- **What we did.** The main fixes (`MAPPING_FIXES.sql`) do **not** close D5. The settlement config
+  routes each Order GST component to the line of its base amount (ItemPrice/Tax → Product Charges;
+  ShippingTax, Promotion/TaxDiscount, LVG-Shipping → Shipping; GiftWrapTax → Other). The payments
+  report has one `sales_tax_collected` and one `low_value_goods` column per row, and a column rule
+  cannot split a column. The money is the same: on all 13,217 reconciled Order records the payment
+  tax column equals the sum of its settlement GST components (0 mismatches). What is left is a
+  schema limitation (D-X1), not a wrong rule. The alternative that makes every line tie,
+  rewriting seven settlement rules to send all Order GST to Sales / Tax on both sides, is shipped
+  separately as `MAPPING_FIXES_OPTION_GST.sql` (`make after-gst`).
+- **Why.** Rewriting correct-looking production rules only to force a tie is a reporting choice,
+  so it is kept out of the defect fixes and left to the reader.
+- **Numbers** (Released, P − S):
+
+  | Line | Main after-fix (`report_after_fix.xlsx`) | GST option (`report_after_fix_gst_option.xlsx`) |
+  |---|---:|---:|
+  | Sales / Product Charges | −92.84 | 0.00 |
+  | Sales / Tax | 0.00 | 0.00 (13,478.97 on both sides) |
+  | Sales / Shipping | +93.20 | 0.00 |
+  | Sales / Other | −0.36 | 0.00 |
+  | **Sales subtotal** | **0.00** | **0.00** |
+  | Every other line | 0.00 | 0.00 |
+  | Net of Summary lines, both columns | 212,118.95 | 212,118.95 |
+
+  In the main report, `reconciled_fields_agree` fails on 805 reconciled records (1,610 record ×
+  field differences). These are exactly the records whose Order GST components sit outside
+  Product Charges, and each differs by exactly those components
+  (`sql/queries/gst_residual_records.sql`: 0 mismatching record-fields). Every other self-check
+  passes. Under the GST option every self-check passes.
+
+### 2. Deferred payment rows
+
+- **Literal reading.** The Payment column is derived "purely from ingested payment records", so it
+  would include every payment record of the settlement, Deferred ones too.
+- **What we did.** The Payments column (C) holds the **Released** records of settlement
+  12395580393. The 2,398 **Deferred** rows (2,381 record_refs, 43,540.07) are shown per line in
+  column F, so the literal Payments figure for any line is C + F.
+- **Why.** Deferred rows have no release date and no settlement line, and none of their
+  record_refs is in the settlement file. Mixing a timing difference into Payments − Settlements
+  would hide routing defects behind 43k of unrelated money.
+- **Numbers** (sums of `total` over in-scope payment rows, from `source_rows`):
+
+  | | Amount |
+  |---|---:|
+  | All in-scope payment records (Released 78,362.44 + Deferred 43,540.07) | 121,902.51 |
+  | − Deferred | −43,540.07 |
+  | − payout transfer (line 16605) | −(−133,756.51) |
+  | **= Amazon settlement total-amount** | **212,118.95** |
+
+  Net of the Summary lines: Released only (column C) **212,118.95** = Amazon's total. All
+  in-scope records (C + F) **255,659.02**, i.e. 43,540.07 above the Settlements column. Per
+  section, column F carries the difference: Sales 75,250.98, Refunds −153.82, Expenses
+  −31,557.09.
+
+### 3. Out-of-scope rows and record counts
+
+- **Literal reading.** "Present only in payments → unreconciled payment" applies to every payment
+  record in the file, including the three settlement ids that are not in the settlement file.
+- **What we did.** The scope is the settlement id(s) in the settlement file. Payment records of
+  other settlement ids are kept, mapped and listed on the *Out of Scope Payments* sheet, and are
+  not counted as unreconciled.
+- **Why.** A settlement file can only confirm its own settlement. Calling 7,041 records of other
+  settlements "unreconciled" would bury the 2,407 that matter for this one.
+- **Numbers.** Reconciled 13,289 and unreconciled settlement 0 under both readings.
+
+  | Unreconciled payment, by reason | Records | Amount (sum of total) |
+  |---|---:|---:|
+  | Other settlement ids: 12370691583 / 12382593803 / 12407469483 | 14 / 5,545 / 1,482 = 7,041 | −83.55 / 756.77 / 27,633.42 = 28,306.64 |
+  | Deferred (settlement 12395580393) | 2,381 | 43,540.07 |
+  | Zero-value order lines | 25 | 0.00 |
+  | Payout transfer | 1 | −133,756.51 |
+  | **Literal count (all settlement ids)** | **9,448** | |
+  | **In-scope count (settlement 12395580393)** | **2,407** | |
+
+  9,448 = 2,407 + 7,041 is also what a reconciliation run with all four settlement ids in scope
+  reports directly (`recon run … --settlement-id 12395580393,12370691583,12382593803,12407469483`
+  → `unreconciled_payment=9448`).
+
 Deliverables in this repository:
 
 | Item | Where |
 |---|---|
 | Source code | `cmd/recon`, `internal/*` |
 | Mapping fixes | [`MAPPING_FIXES.sql`](MAPPING_FIXES.sql) |
-| Before-fix report (configs as provided) | `reports/report_before_fix.xlsx` |
-| After-fix report | `reports/report_after_fix.xlsx` (configs + `MAPPING_FIXES.sql`) |
-| PostgreSQL dump (after-fix state) | `db/recon_dump.sql.gz` |
+| Optional GST reporting choice (applied on top of the fixes) | [`MAPPING_FIXES_OPTION_GST.sql`](MAPPING_FIXES_OPTION_GST.sql) |
+| Before-fix report (configs as provided) | `reports/report_before_fix.xlsx` (`make before`) |
+| After-fix report, main | `reports/report_after_fix.xlsx` (configs + `MAPPING_FIXES.sql`, `make after`) |
+| After-fix report, GST option | `reports/report_after_fix_gst_option.xlsx` (+ `MAPPING_FIXES_OPTION_GST.sql`, `make after-gst`) |
+| PostgreSQL dump (main after-fix state; summary totals of all three runs in `run_history_summary`) | `db/recon_dump.sql.gz` |
 | Progress log | [`PROGRESS.md`](PROGRESS.md) and the commit history |
 | Input data, unmodified | `data/` (byte-identical copies of the files provided) |
 
 ## Results
 
 Scope = settlement `12395580393` (the only settlement in the settlement file). Counts are distinct
-record_refs, the same before and after the fixes (the fixes change routing and one key, not which
-rows match):
+record_refs, the same in all three runs (the fixes change routing and one key, not which rows
+match):
 
 | Status | Records | Why |
 |---|---:|---|
 | Reconciled | 13,289 | |
 | Unreconciled payment | 2,407 | 2,381 Deferred (not yet released, 43,540.07) · 25 zero-value order lines (0.00) · 1 payout transfer (−133,756.51) |
 | Unreconciled settlement | 0 | |
-| Out-of-scope payment (other settlement ids, reported separately) | 7,041 | settlements 12370691583 / 12382593803 / 12407469483, not in the settlement file |
+| Out-of-scope payment (other settlement ids, reported separately) | 7,041 | settlements 12370691583 / 12382593803 / 12407469483, not in the settlement file (literal count incl. these: 9,448, see Interpretation choices §3) |
 
-Summary, Payments (Released rows of the settlement) vs Settlements:
+Summary, Payments (Released rows of the settlement, column C) vs Settlements (column D):
 
-| | Before fixes: P − S | After fixes: Payments | Settlements | P − S |
-|---|---:|---:|---:|---:|
-| Sales / Product Charges | −92.84 | 335,336.96 | 335,336.96 | 0.00 |
-| Sales / Tax | 0.00 | 13,478.97 | 13,478.97 | 0.00 |
-| Sales / Shipping | 13,572.17 | 8,294.16 | 8,294.16 | 0.00 |
-| Sales / Inventory Reimbursements | 0.00 | 679.69 | 679.69 | 0.00 |
-| Sales / Other | −11.97 | 11.61 | 11.61 | 0.00 |
-| Refunds / Refund expenses | 42.59 | 216.28 | 216.28 | 0.00 |
-| Refunds / Refunded sales | 0.00 | −2,031.37 | −2,031.37 | 0.00 |
-| Expenses / Promo rebates | 11,273.53 | −11,273.53 | −11,273.53 | 0.00 |
-| Expenses / FBA fees | 0.00 | −0.41 | −0.41 | 0.00 |
-| Expenses / Amazon fees | −133,756.51 | −132,593.41 | −132,593.41 | 0.00 |
-| Expenses / Other | −11,273.53 | 0.00 | 0.00 | 0.00 |
-| **Net of Summary lines** | −120,246.56 | **212,118.95** | **212,118.95** | 0.00 |
+| | Before: P − S | Main after: Payments | Settlements | P − S | GST option: Payments | Settlements | P − S |
+|---|---:|---:|---:|---:|---:|---:|---:|
+| Sales / Product Charges | −92.84 | 348,815.93 | 348,908.77 | −92.84 | 335,336.96 | 335,336.96 | 0.00 |
+| Sales / Tax | 0.00 | 0.00 | 0.00 | 0.00 | 13,478.97 | 13,478.97 | 0.00 |
+| Sales / Shipping | 13,572.17 | 8,294.16 | 8,200.96 | 93.20 | 8,294.16 | 8,294.16 | 0.00 |
+| Sales / Inventory Reimbursements | 0.00 | 679.69 | 679.69 | 0.00 | 679.69 | 679.69 | 0.00 |
+| Sales / Other | −11.97 | 11.61 | 11.97 | −0.36 | 11.61 | 11.61 | 0.00 |
+| **Sales** | 13,467.36 | 357,801.39 | 357,801.39 | **0.00** | 357,801.39 | 357,801.39 | **0.00** |
+| Refunds / Refund expenses | 42.59 | 216.28 | 216.28 | 0.00 | 216.28 | 216.28 | 0.00 |
+| Refunds / Refunded sales | 0.00 | −2,031.37 | −2,031.37 | 0.00 | −2,031.37 | −2,031.37 | 0.00 |
+| Expenses / Promo rebates | 11,273.53 | −11,273.53 | −11,273.53 | 0.00 | −11,273.53 | −11,273.53 | 0.00 |
+| Expenses / FBA fees | 0.00 | −0.41 | −0.41 | 0.00 | −0.41 | −0.41 | 0.00 |
+| Expenses / Amazon fees | −133,756.51 | −132,593.41 | −132,593.41 | 0.00 | −132,593.41 | −132,593.41 | 0.00 |
+| Expenses / Other | −11,273.53 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 | 0.00 |
+| **Net of Summary lines** | −120,246.56 | **212,118.95** | **212,118.95** | 0.00 | **212,118.95** | **212,118.95** | 0.00 |
 
-Both columns tie to Amazon's settlement `total-amount` **212,118.95 AUD**, every reconciled record
-agrees field by field, and all self-checks pass. Lines not shown are 0 on both sides. Deferred
-payment rows (43,540.07) are shown per line in Summary column F. The payout transfer is the only
-difference between the payments' net amount (78,362.44) and Amazon's total.
+In both after-fix reports, both columns tie to Amazon's settlement `total-amount`
+**212,118.95 AUD**. Lines not shown are 0 on both sides.
 
-Twelve config defects (D1–D7 moved money here, D8–D12 are latent) and the items that cannot be
-closed are documented in [`MAPPING_FIXES.sql`](MAPPING_FIXES.sql); how each was isolated, with the
+- **Main report:** the only per-line differences are the GST residual (D5) inside Sales, and the
+  only failing self-check is `reconciled_fields_agree` on those 805 GST records.
+- **GST option:** every line is 0.00, every reconciled record agrees field by field, and every
+  self-check passes.
+
+Deferred payment rows (43,540.07) are shown per line in Summary column F. The payout transfer is
+the only difference between the payments' net amount (78,362.44) and Amazon's total.
+
+Eleven config defects are fixed in [`MAPPING_FIXES.sql`](MAPPING_FIXES.sql): D1–D4, D6 and D7
+moved money here, and D8–D12 are latent. The block for D5 (GST, not closable in the schema) and
+for the other items that cannot be closed is in the same file. How each was isolated, with the
 query behind every amount, is in [`PROGRESS.md`](PROGRESS.md).
 
 ## Running it
@@ -297,7 +395,12 @@ Descriptive DS1/DS2 columns show the first source row of a record; amounts are s
 - Every reconciled record agrees per summary field between the two sides — catches misroutes that
   net to zero on record totals and on Summary columns.
 
-Before the fixes four of these flag problems; after `MAPPING_FIXES.sql` all pass.
+Results by run:
+
+- **Before the fixes:** `amount_routed_once` and `reconciled_fields_agree` fail, and
+  `fallback_rule_routed`, `routed_fields_on_summary` and the payments tie-out are flagged.
+- **After `MAPPING_FIXES.sql`:** only `reconciled_fields_agree` fails (805 GST-residual records, D5).
+- **With `MAPPING_FIXES_OPTION_GST.sql` as well:** every check passes.
 
 ## Testing
 
@@ -328,9 +431,12 @@ make lint && make test && make test-integration
   133,756.51 = 212,118.95). They are reconciled and listed (as unreconciled payments, reason "Deferred"), but the
   Summary's Payments column holds Released rows only and shows the Deferred amounts per line in
   column F, so a timing difference is not mixed into the comparison.
-- **GST** of orders is reported on the Summary's Sales / Tax line on both sides (MAPPING_FIXES D5):
-  the payments report has one tax column per row, so a per-component split cannot be matched.
-  Refund GST stays in Refund expenses, as both configs route refund components.
+- **GST** of orders stays where each config routes it in the main fixes: the settlement config
+  splits it by component, while the payments report has one tax column per row. The residual inside
+  Sales is documented as not closable in the config schema (MAPPING_FIXES D5, D-X1).
+  `MAPPING_FIXES_OPTION_GST.sql` is the optional alternative that puts all Order GST on Sales / Tax
+  on both sides (Interpretation choices §1). Refund GST is in Refund expenses on both sides, as both
+  configs route refund components.
 - **Date token**: UTC date of the payment release timestamp vs settlement `posted-date` (above).
 - **Zero amounts** carry no sign, so they route to no bucket.
 - **Duplicate rules** in one group are applied as written and surfaced, not silently de-duplicated.
