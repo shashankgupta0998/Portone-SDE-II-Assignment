@@ -60,4 +60,27 @@ INSERT INTO payment_mapping_rules (src_line, transaction_type, description, amou
                                    to_summary_field_when_positive_amount, to_summary_field_when_negative_amount)
 VALUES (NULL, 'TRANSFER', 'any', 'other', 'TRANSFER+description+settlement_id+date', '', '');
 
+-- ---------------------------------------------------------------------------
+-- D2  Order promotional rebates routed to Expenses / Other instead of
+--     Promo rebates                                          [payments config]
+-- ---------------------------------------------------------------------------
+-- Summary lines: Expenses / Promo rebates P - S = +11,273.53 and Expenses / Other
+--   P - S = -11,273.53 (net zero across the section, so the section subtotal hides it).
+-- Source rows: 3,983 Released Order rows of settlement 12395580393 with a non-zero
+--   promotional_rebates column (first: amazon_payments_data.csv line 11), sum -11,273.53.
+--   Settlement side: Order / Promotion / Principal (1,580 rows, -4,098.30) +
+--   Order / Promotion / Shipping (2,613 rows, -7,175.23) = -11,273.53, routed by
+--   settlement config lines 72/73 to expenses_promotional_rebates.
+-- Rule: payments config line 65
+--     ORDER,any,promotional_rebates,txn_ref+sku+date,expenses_other,expenses_other
+-- Change: both buckets -> expenses_promotional_rebates. The settlement config, the
+--   REFUND promotional_rebates rule (refunded_expenses, same family) and the Summary
+--   sheet's "Promo rebates" line all say promotions are promo rebates.
+-- Moves: 11,273.53 from Expenses / Other to Expenses / Promo rebates
+--   (deferred: 4,448.56; other settlements also move).
+UPDATE payment_mapping_rules
+   SET to_summary_field_when_positive_amount = 'expenses_promotional_rebates',
+       to_summary_field_when_negative_amount = 'expenses_promotional_rebates'
+ WHERE src_line = 65 AND transaction_type = 'ORDER' AND description = 'any' AND amount_field = 'promotional_rebates';
+
 COMMIT;

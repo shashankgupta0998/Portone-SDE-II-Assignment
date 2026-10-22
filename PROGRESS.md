@@ -143,3 +143,16 @@ then confirm row by row on reconciled record_refs.
   remains an unreconciled payment (no transfer line in the settlement file, D-M3), now with a
   proper key `TRANSFER+TO_ACCOUNT_ENDING_WITH:_334+12395580393+2026-07-18` instead of
   `+12395580393+2026-07-18`.
+
+## 6. D2 — Order promotional rebates in Expenses / Other (±11,273.53)
+
+- Two lines move by the same amount in opposite directions (Promo rebates +11,273.53, Expenses /
+  Other −11,273.53): a routing difference, not missing money.
+- Settlement side: `Order / Promotion / Principal` −4,098.30 + `Order / Promotion / Shipping`
+  −7,175.23 = −11,273.53 → `expenses_promotional_rebates` (settlement config lines 72/73).
+  Payment side: column `promotional_rebates` of 3,983 Released order rows = −11,273.53 → rule
+  line 65 → `expenses_other`. Equal to the cent.
+- Ruled out: the settlement rule being the wrong one — the Summary has a dedicated "Promo rebates"
+  line and the payments config itself routes refunded promotions to the refund promo family.
+- Fix D2 → Promo rebates and Expenses / Other both **0.00**; `reconciled_fields_agree` drops from
+  6,942 to 5,159 records.
