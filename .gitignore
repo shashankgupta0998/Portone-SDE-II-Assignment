@@ -7,3 +7,7 @@
 .DS_Store
 .idea/
 .vscode/
+
+# Local drafts, not part of the submission
+SUBMISSION_EMAIL.md
+INTERVIEW_PREP.md
