@@ -66,9 +66,9 @@ committed reports or from a query against the database (queries in PROGRESS.md �
 
   | | Amount |
   |---|---:|
-  | All in-scope payment records (Released 78,362.44 + Deferred 43,540.07) | 121,902.51 |
+  | All in-scope payment records (Released + Deferred) | 121,902.51 |
   | − Deferred | −43,540.07 |
-  | − payout transfer (line 16605) | −(−133,756.51) |
+  | + add back payout transfer (line 16605, not a settlement line) | +133,756.51 |
   | **= Amazon settlement total-amount** | **212,118.95** |
 
   Net of the Summary lines: Released only (column C) **212,118.95** = Amazon's total. All
