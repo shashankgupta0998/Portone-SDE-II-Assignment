@@ -184,6 +184,10 @@ make dump                     # pg_dump of the recon schema -> db/recon_dump.sql
 the configs from the CSVs, re-ingest both files (replacing the previous ingestion), reconcile and
 write the report. A full run over the real files takes ~20 s.
 
+Run `make after` last before `make dump`, so `db/recon_dump.sql.gz` holds the main after-fix state.
+The GST option's totals remain in `run_history_summary`. The committed dump was made by
+`make before`, `make after-gst`, `make after`, `make dump`, in that order, on an empty schema.
+
 ### The same flow, step by step
 
 ```bash

@@ -55,6 +55,9 @@ after-gst: build
 	$(BIN) apply-sql --file $(GST_OPTION)
 	$(BIN) run --payments $(PAY) --settlements $(SET) --label after-fix-gst-option --out reports/report_after_fix_gst_option.xlsx
 
+# pg_dump of whatever state the last run left. Run `make after` last (before -> after-gst ->
+# after -> dump) so the dump holds the main after-fix state; the other runs' totals stay in
+# run_history_summary.
 dump:
 	mkdir -p db
 	pg_dump "$(DATABASE_URL)" --schema=$(RECON_SCHEMA) --no-owner --no-privileges | gzip -9 > db/recon_dump.sql.gz
