@@ -156,3 +156,37 @@ then confirm row by row on reconciled record_refs.
   line and the payments config itself routes refunded promotions to the refund promo family.
 - Fix D2 → Promo rebates and Expenses / Other both **0.00**; `reconciled_fields_agree` drops from
   6,942 to 5,159 records.
+
+## 7. D3 + D4 — duplicate payment rules (Shipping +13,572.17)
+
+- `amount_routed_once` named the rows: the same `(row, column)` routed by two rules. Two pairs
+  in the payments config, both in the `ORDER,any` group:
+  `sales_tax_collected` (lines 71 → Product Charges and 72 → Shipping) and `low_value_goods`
+  (lines 6 → Product Charges and 5 → Shipping).
+- Shipping variance decomposed exactly: duplicate tax +13,675.59 + duplicate LVG −196.62 +
+  (shipping-tax split, D5) +93.20 = **+13,572.17**.
+- Ruled out "the second rule is meant for the shipping part of the tax": a column rule applies
+  to the whole column; there is no way for it to take only the shipping share, so it can only
+  double count.
+- Fix D3 + D4 (delete lines 72 and 5) → Shipping +13,572.17 → +93.20; `amount_routed_once` passes;
+  `reconciled_fields_agree` 5,159 → 819 records.
+
+## 8. D5 — GST split per component on the settlement side (−92.84 / +93.20 / −0.36)
+
+- What was left nets to zero inside Sales: Product Charges −92.84, Shipping +93.20, Other −0.36.
+- Hypothesis: the payments `sales_tax_collected` column is the sum of four settlement components.
+  Query over all 13,217 reconciled Order record_refs: payment `sales_tax_collected` =
+  Σ settlement `ItemPrice/Tax + ItemPrice/ShippingTax + ItemPrice/GiftWrapTax +
+  Promotion/TaxDiscount` for **every** record (0 mismatches; 13,675.59 both sides), and
+  `low_value_goods` = Σ `LowValueGoodsTax-Principal + -Shipping` (0 mismatches; −196.62).
+- So: ShippingTax 581.68 + GiftWrapTax 0.36 + TaxDiscount −672.16 + LVG-Shipping −2.72 = −92.84
+  goes to Shipping / Other on the settlement side and can only go to one bucket on the payment
+  side. Promotion/TaxDiscount → Shipping (line 95) is wrong on its own too: it is the tax
+  discount of principal *and* shipping promotions.
+- Options: (a) point the settlement tax components at Product Charges — ties, but books shipping
+  and gift-wrap GST as product revenue; (b) route all order GST to the Summary's **Sales / Tax**
+  line on both sides — ties, and makes Product Charges / Shipping GST-exclusive, which is what
+  `product_sales` (= Principal 335,336.96) and `shipping_credits` (= Shipping 8,294.16) are.
+  Chose (b).
+- Fix D5 → Product Charges, Shipping, Tax all **0.00**; Sales / Other now −11.61 (D6 only);
+  `reconciled_fields_agree` 819 → 19 records.
