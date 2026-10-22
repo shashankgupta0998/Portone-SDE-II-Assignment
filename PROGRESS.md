@@ -88,3 +88,58 @@ First observations from `recon diagnose` (leads to investigate, not yet conclusi
 - No settlement record is unreconciled.
 
 The investigation of each variance follows in the next sections.
+
+## 4. Investigation set-up
+
+Before touching a rule I changed how the numbers are *presented*, not what they are, and
+regenerated the before-fix report with the same code so before/after differ only by config
+(commit `23ae7cb`):
+
+- **Deferred rows are not part of this settlement.** In-scope payment rows split by
+  `Transaction status`: Released rows sum (total) to 78,362.44; adding back the transfer
+  (-133,756.51, see D1) gives **212,118.95 = Amazon's total-amount exactly**. The 2,398 Deferred
+  rows (43,540.07) have no release date and none of their 2,381 record_refs exists in the
+  settlement file. So the Payments column = Released rows; Deferred rows are shown per line in
+  column F as a timing memo (D-M2), not mixed into the comparison.
+- **New self-checks**, so "columns agree" is not the only test: an amount routed by two rules;
+  amounts summarised through a fallback rule; routing to a field with no Summary line; net of the
+  Summary lines vs Amazon total-amount (per source); and, per reconciled record, every summary
+  field equal on both sides (catches misroutes that net to zero).
+
+Before-fix, Released, settlement 12395580393 (P − S):
+
+| Line | Payments | Settlements | P − S |
+|---|---:|---:|---:|
+| Product Charges | 348,815.93 | 348,908.77 | −92.84 |
+| Shipping | 21,773.13 | 8,200.96 | 13,572.17 |
+| Sales / Other | 0.00 | 11.97 | −11.97 |
+| Refund expenses | 258.87 | 216.28 | 42.59 |
+| Promo rebates | 0.00 | −11,273.53 | 11,273.53 |
+| Expenses / Amazon fees | −266,349.92 | −132,593.41 | −133,756.51 |
+| Expenses / Other | −11,273.53 | 0.00 | −11,273.53 |
+| (no Summary line) `sales_gift_wrap_credits` | 11.61 | 0.00 | 11.61 |
+
+Failing checks: `amount_routed_once` (9,207 row-columns, 23,901.36 counted twice, whole file),
+`reconciled_fields_agree` (6,942 reconciled records disagree field by field even though every
+reconciled record's *total* agrees — so record totals alone hide misroutes).
+Net of Summary lines: payments 91,872.39 vs settlements 212,118.95 (= header).
+
+Method for every variance below: decompose the settlement side by
+(transaction-type, amount-type, amount-description) and the payment side by
+(type, amount column, rule), find the combination whose sum equals the variance to the cent,
+then confirm row by row on reconciled record_refs.
+
+## 5. D1 — payout transfer booked as an Amazon fee (−133,756.51)
+
+- Hypothesis from the size: −133,756.51 is not a sum of order fees; one payment row has that
+  exact value: `amazon_payments_data.csv` line 16605, `Transfer`, "To account ending with: 334".
+- Query: components of that row → rule level 4 (fallback `,any,total → expenses_amazon_fees`,
+  config line 110). Config lines 62/63 (`TRANSFER,TO_ACCOUNT_ENDING` / `TO_YOUR_ACCOUNT_ENDING`)
+  can never match: normalised description is `TO_ACCOUNT_ENDING_WITH:_334`.
+- Ruled out: prefix matching in code. The schema has only exact and `any`; adding implicit prefix
+  semantics would change how all 149 rules behave. `TRANSFER + any` expresses it in data, and the
+  exact `MICRO_DEPOSIT` rules still win by precedence.
+- Fix (MAPPING_FIXES.sql D1) → Expenses / Amazon fees P − S: −133,756.51 → **0.00**. The transfer
+  remains an unreconciled payment (no transfer line in the settlement file, D-M3), now with a
+  proper key `TRANSFER+TO_ACCOUNT_ENDING_WITH:_334+12395580393+2026-07-18` instead of
+  `+12395580393+2026-07-18`.
