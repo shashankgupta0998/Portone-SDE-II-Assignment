@@ -136,7 +136,7 @@ then confirm row by row on reconciled record_refs.
 - Hypothesis from the size: −133,756.51 is not a sum of order fees; one payment row has that
   exact value: `amazon_payments_data.csv` line 16605, `Transfer`, "To account ending with: 334".
 - Query: components of that row → rule level 4 (fallback `,any,total → expenses_amazon_fees`,
-  config line 110). Config lines 62/63 (`TRANSFER,TO_ACCOUNT_ENDING` / `TO_YOUR_ACCOUNT_ENDING`)
+  config line 110). Config lines 62/63 (`TRANSFER,TO_YOUR_ACCOUNT_ENDING` / `TRANSFER,TO_ACCOUNT_ENDING`)
   can never match: normalised description is `TO_ACCOUNT_ENDING_WITH:_334`.
 - Ruled out: prefix matching in code. The schema has only exact and `any`; adding implicit prefix
   semantics would change how all 149 rules behave. `TRANSFER + any` expresses it in data, and the
